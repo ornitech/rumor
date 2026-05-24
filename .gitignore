@@ -1,1 +1,6 @@
-target/debug
+/target
+**/*.rs.bk
+*.log
+.DS_Store
+.idea/
+.vscode/
