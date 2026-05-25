@@ -1,7 +1,12 @@
 [package]
-name = "hanoi"
+name = "rumor"
 version = "0.1.0"
 edition = "2021"
+description = "Multi-process TUI orchestrator"
+license = "MIT"
+repository = "https://github.com/ornitech/rumor"
+homepage = "https://github.com/ornitech/rumor"
+readme = "README.md"
 
 [dependencies]
 ratatui = "0.30"

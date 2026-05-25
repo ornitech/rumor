@@ -41,13 +41,13 @@ fn body_inner_size(width: u16, height: u16) -> (u16, u16) {
 fn init_tracing() {
     let dir = dirs_data_local()
         .unwrap_or_else(|| std::env::temp_dir())
-        .join("hanoi");
+        .join("rumor");
     let _ = std::fs::create_dir_all(&dir);
-    let file_appender = tracing_appender::rolling::never(&dir, "hanoi.log");
+    let file_appender = tracing_appender::rolling::never(&dir, "rumor.log");
     let subscriber = tracing_subscriber::fmt()
         .with_writer(file_appender)
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("HANOI_LOG")
+            tracing_subscriber::EnvFilter::try_from_env("RUMOR_LOG")
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .with_ansi(false)
@@ -76,11 +76,11 @@ fn restore_terminal() {
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 2 {
-        eprintln!("usage: hanoi <config.json>");
+        eprintln!("usage: rumor <config.json>");
         eprintln!();
-        eprintln!("Logs are written to {}/hanoi/hanoi.log",
+        eprintln!("Logs are written to {}/rumor/rumor.log",
             dirs_data_local().map(|p| p.display().to_string()).unwrap_or_else(|| "<tmp>".into()));
-        eprintln!("Set HANOI_LOG=debug to trace dependency readiness checks.");
+        eprintln!("Set RUMOR_LOG=debug to trace dependency readiness checks.");
         std::process::exit(2);
     }
     let config_path = PathBuf::from(&args[1]);
@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
     restore_terminal();
 
     if let Err(e) = &result {
-        eprintln!("hanoi: {e:#}");
+        eprintln!("rumor: {e:#}");
     }
     result
 }

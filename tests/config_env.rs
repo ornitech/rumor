@@ -260,7 +260,7 @@ fn config_rejects_missing_env_file() {
 
 fn tempdir() -> PathBuf {
     let base = std::env::temp_dir().join(format!(
-        "hanoi-test-{}-{}",
+        "rumor-test-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
