@@ -41,7 +41,7 @@ async fn wait_for_process(mgr: &ProcessManager, idx: usize) -> Arc<Process> {
 
 fn tmpdir() -> PathBuf {
     let p = std::env::temp_dir().join(format!(
-        "hanoi-pty-{}-{}",
+        "rumor-pty-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

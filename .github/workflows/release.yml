@@ -1,0 +1,144 @@
+name: Build and Publish
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: macos-15
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch_key: arm
+          - target: x86_64-apple-darwin
+            arch_key: intel
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION (tag: $GITHUB_REF_NAME)"
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package tarball
+        id: pkg
+        run: |
+          ARTIFACT="rumor-${{ matrix.target }}.tar.gz"
+          tar -czf "$ARTIFACT" -C "target/${{ matrix.target }}/release" rumor
+          SHA256=$(shasum -a 256 "$ARTIFACT" | awk '{print $1}')
+          echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "Built $ARTIFACT (sha256=$SHA256)"
+
+      - name: Wait for GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for i in $(seq 1 30); do
+            if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+              echo "Release found"
+              exit 0
+            fi
+            echo "Waiting for release... (attempt $i/30)"
+            sleep 2
+          done
+          echo "Release not found after 60s"
+          exit 1
+
+      - name: Upload artifact to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.version.outputs.tag }}" "${{ steps.pkg.outputs.artifact }}" --clobber
+
+      - name: Record sha256 for downstream job
+        run: |
+          mkdir -p sha
+          echo "${{ steps.pkg.outputs.sha256 }}" > "sha/${{ matrix.arch_key }}.sha256"
+
+      - name: Upload sha256 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sha-${{ matrix.arch_key }}
+          path: sha/${{ matrix.arch_key }}.sha256
+          retention-days: 1
+
+  dispatch:
+    name: Notify Homebrew tap
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download sha artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sha-*
+          path: sha
+          merge-multiple: true
+
+      - name: Read sha256s
+        id: sha
+        run: |
+          ARM=$(cat sha/arm.sha256)
+          INTEL=$(cat sha/intel.sha256)
+          echo "arm=$ARM" >> "$GITHUB_OUTPUT"
+          echo "intel=$INTEL" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch to homebrew-tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+          TAG: ${{ needs.build.outputs.tag }}
+          ARM_SHA: ${{ steps.sha.outputs.arm }}
+          INTEL_SHA: ${{ steps.sha.outputs.intel }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "No Homebrew tap token set, skipping"
+            exit 0
+          fi
+          BASE="https://github.com/${{ github.repository }}/releases/download/${TAG}"
+          curl -fsSL -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token $HOMEBREW_TAP_TOKEN" \
+            "https://api.github.com/repos/ornitech/homebrew-tap/dispatches" \
+            -d @- <<EOF
+          {
+            "event_type": "update-formula",
+            "client_payload": {
+              "name": "rumor",
+              "version": "${VERSION}",
+              "tag": "${TAG}",
+              "arm_url":   "${BASE}/rumor-aarch64-apple-darwin.tar.gz",
+              "arm_sha256":   "${ARM_SHA}",
+              "intel_url": "${BASE}/rumor-x86_64-apple-darwin.tar.gz",
+              "intel_sha256": "${INTEL_SHA}"
+            }
+          }
+          EOF

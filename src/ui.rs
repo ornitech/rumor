@@ -26,7 +26,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title("hanoi");
+    let block = Block::default().borders(Borders::ALL).title("rumor");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
