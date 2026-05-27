@@ -19,13 +19,25 @@ fn loads_example_config() {
     let path = workspace_root().join("example.config.json");
     let loaded = Config::load(&path).expect("example.config.json should parse");
     let names: Vec<&str> = loaded.config.processes.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(names, ["counter", "ticker", "repl"]);
+    assert_eq!(names, ["counter", "ticker", "repl", "migration"]);
 
     // cwd should be canonicalized (absolute).
     for proc in &loaded.config.processes {
         assert!(proc.cwd.is_absolute(), "{} cwd not absolute", proc.name);
         assert!(proc.cwd.is_dir(), "{} cwd not dir", proc.name);
     }
+
+    // migration is the only short-lived process; rest default to long-lived.
+    let by_name: HashMap<&str, bool> = loaded
+        .config
+        .processes
+        .iter()
+        .map(|p| (p.name.as_str(), p.long_lived))
+        .collect();
+    assert_eq!(by_name["counter"], true);
+    assert_eq!(by_name["ticker"], true);
+    assert_eq!(by_name["repl"], true);
+    assert_eq!(by_name["migration"], false);
 }
 
 #[test]
@@ -258,6 +270,55 @@ fn config_rejects_missing_env_file() {
     std::fs::write(&cfg_path, body).unwrap();
     let err = Config::load(&cfg_path).unwrap_err().to_string();
     assert!(err.contains("envFiles"), "got: {err}");
+}
+
+// ---------------------------------------------------------------------------
+// longLived parsing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn long_lived_defaults_to_true() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "a", "command": "echo", "cwd": "{0}" }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let loaded = Config::load(&cfg).expect("should load");
+    assert_eq!(loaded.config.processes[0].long_lived, true);
+}
+
+#[test]
+fn long_lived_false_parses() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "a", "command": "echo", "cwd": "{0}", "longLived": false }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let loaded = Config::load(&cfg).expect("should load");
+    assert_eq!(loaded.config.processes[0].long_lived, false);
+}
+
+#[test]
+fn long_lived_true_parses() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "a", "command": "echo", "cwd": "{0}", "longLived": true }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let loaded = Config::load(&cfg).expect("should load");
+    assert_eq!(loaded.config.processes[0].long_lived, true);
 }
 
 // ---------------------------------------------------------------------------

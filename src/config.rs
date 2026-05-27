@@ -34,6 +34,13 @@ pub struct ProcessConfig {
     pub env_files: Vec<PathBuf>,
     pub env: HashMap<String, String>,
     pub depends_on: Vec<Dependency>,
+    /// True for services that should run forever (default). False for one-shot
+    /// scripts where a clean `exit 0` is success, not a crash.
+    pub long_lived: bool,
+}
+
+fn default_long_lived() -> bool {
+    true
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +90,8 @@ struct RawProcessConfig {
     env: HashMap<String, String>,
     #[serde(default, rename = "dependsOn")]
     depends_on: Vec<RawDependency>,
+    #[serde(default = "default_long_lived", rename = "longLived")]
+    long_lived: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,6 +131,7 @@ impl Config {
                 mut env_files,
                 env,
                 depends_on,
+                long_lived,
             } = raw_proc;
 
             if name.trim().is_empty() {
@@ -261,6 +271,7 @@ impl Config {
                 env_files,
                 env,
                 depends_on: deps,
+                long_lived,
             });
         }
 

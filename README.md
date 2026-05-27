@@ -15,6 +15,10 @@ brew install rumor
 rumor <config.json>
 ```
 
+Set `"longLived": false` on one-shot processes (migrations, seed scripts) so a
+clean `exit 0` is shown as success (green) rather than a crash (red). Defaults
+to `true`.
+
 See [`example.config.json`](example.config.json) for the schema. A minimal config:
 
 ```json

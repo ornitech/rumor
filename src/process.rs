@@ -46,6 +46,9 @@ impl std::fmt::Display for ExitInfo {
 
 pub struct Process {
     pub name: String,
+    /// Copied from `ProcessConfig::long_lived`. UI uses this to decide whether
+    /// a clean `exit 0` is success (false) or an unexpected stop (true).
+    pub long_lived: bool,
     pub parser: Arc<Mutex<vt100::Parser>>,
     /// Tee of every byte read from the PTY, capped at RAW_CAP. Used to replay
     /// scrollback into a fresh parser on resize so wrap toggles and window
@@ -130,6 +133,7 @@ impl Process {
 
         Ok(Self {
             name: cfg.name.clone(),
+            long_lived: cfg.long_lived,
             parser,
             raw,
             status_rx,
