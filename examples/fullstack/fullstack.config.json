@@ -8,7 +8,7 @@
         "-e", "POSTGRES_USER",
         "-e", "POSTGRES_PASSWORD",
         "-e", "POSTGRES_DB",
-        "-p", "5432:5432",
+        "-p", "${POSTGRES_PORT}:5432",
         "postgres:16-alpine"
       ],
       "cwd": "./db",
@@ -16,10 +16,12 @@
     },
     {
       "name": "redis",
-      "command": "bash",
+      "command": "docker",
       "args": [
-        "-c",
-        "exec docker run --rm --name rumor-example-redis -p 6379:6379 redis:7-alpine redis-server --loglevel \"$REDIS_LOG_LEVEL\""
+        "run", "--rm", "--name", "rumor-example-redis",
+        "-p", "${REDIS_PORT}:6379",
+        "redis:7-alpine",
+        "redis-server", "--loglevel", "${REDIS_LOG_LEVEL}"
       ],
       "cwd": "./redis",
       "envFiles": ["./.env", "./redis/.env.local"]
@@ -31,8 +33,8 @@
       "cwd": "./api",
       "envFiles": ["./.env", "./api/.env.local"],
       "dependsOn": [
-        { "name": "db",    "until": { "port": 5432 } },
-        { "name": "redis", "until": { "port": 6379 } }
+        { "name": "db",    "until": { "port": "${POSTGRES_PORT}" } },
+        { "name": "redis", "until": { "port": "${REDIS_PORT}" } }
       ]
     },
     {
@@ -45,7 +47,7 @@
         "LOG_LEVEL": "warn"
       },
       "dependsOn": [
-        { "name": "api", "until": { "port": 3000 } }
+        { "name": "api", "until": { "port": "${API_PORT}" } }
       ]
     }
   ]

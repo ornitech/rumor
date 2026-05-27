@@ -5,6 +5,7 @@ A four-service example that shows off:
 - **Dependency ordering** via port-based readiness (`dependsOn` / `until.port`)
 - **Docker-managed services** treated as ordinary long-lived processes
 - **Three layers of environment variables** with explicit precedence
+- **`${VAR}` substitution in config strings** so a single env var drives both a docker `-p` mapping and the matching `dependsOn.until.port` check
 
 ## Topology
 
@@ -17,14 +18,14 @@ db (postgres in docker)   redis (in docker)
             frontend (python http)
 ```
 
-`api` waits for `db:5432` and `redis:6379` before starting.
-`frontend` waits for `api:3000` before starting.
+`api` waits for `db:${POSTGRES_PORT}` and `redis:${REDIS_PORT}` before starting.
+`frontend` waits for `api:${API_PORT}` before starting. All four port numbers come from the central `.env`, so changing one knob there reconfigures both the docker port mapping and rumor's readiness check.
 
 ## Prereqs
 
 - `docker` (running)
 - `python3` (stdlib only, no pip installs)
-- Free ports: `5432`, `6379`, `3000`, `8080`
+- Free ports as set in [`.env`](.env) (defaults: `5432`, `6379`, `3000`, `8080`)
 
 ## Run
 
@@ -55,7 +56,8 @@ There are three layers, loaded in this order (later wins), per `src/env.rs`:
 | `LOG_LEVEL`         | `info`                      | `debug` (api)                            | `warn` (frontend)        | api: `debug`, frontend: `warn`, db/redis: `info` |
 | `FRONTEND_TITLE`    | `Rumor Fullstack Example`   | `Frontend (local override)` (frontend)   | -                        | frontend: `Frontend (local override)` |
 | `POSTGRES_PASSWORD` | `changeme`                  | `db-local-secret` (db)                   | -                        | db: `db-local-secret` (forwarded into the container via `-e POSTGRES_PASSWORD`) |
-| `REDIS_LOG_LEVEL`   | `notice`                    | `debug` (redis)                          | -                        | redis: `debug` (expanded into `redis-server --loglevel` by the bash wrapper) |
+| `REDIS_LOG_LEVEL`   | `notice`                    | `debug` (redis)                          | -                        | redis: `debug` (rumor substitutes `${REDIS_LOG_LEVEL}` into the redis service's args, so docker runs `redis-server --loglevel debug`) |
+| `POSTGRES_PORT`     | `5432`                      | -                                        | -                        | drives both the db `-p ${POSTGRES_PORT}:5432` mapping and api's `until.port`; same pattern for `REDIS_PORT` and `API_PORT` |
 
 Each `.env.local` overrides something real, so every service exercises the merge.
 
@@ -64,7 +66,8 @@ To verify all three layers in one run:
 - `curl http://localhost:3000/` -> JSON includes `"LOG_LEVEL": "debug"` (api `.env.local` beat central `.env`).
 - Open <http://localhost:8080> -> page title says "Frontend (local override)" (frontend `.env.local` beat central `.env`) AND the page reports `LOG_LEVEL=warn` (JSON `env` block beat both files).
 - `docker exec rumor-example-db env | grep POSTGRES_PASSWORD` -> `POSTGRES_PASSWORD=db-local-secret` (db `.env.local` beat central `.env`, forwarded through docker).
-- The `redis` tab's stdout shows DEBUG-level boot messages (redis `.env.local` set `REDIS_LOG_LEVEL=debug`, which the bash wrapper expanded into `redis-server --loglevel debug`).
+- The `redis` tab's stdout shows DEBUG-level boot messages (redis `.env.local` set `REDIS_LOG_LEVEL=debug`, which rumor substituted into the args list so docker ran `redis-server --loglevel debug`).
+- Try editing `POSTGRES_PORT=5444` in `.env` and re-running: postgres comes up on host port 5444 and `api` correctly waits on 5444 — one edit, both sides.
 
 ## Why bare `-e VAR` on the docker services
 
