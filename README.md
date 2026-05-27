@@ -30,6 +30,8 @@ See [`example.config.json`](example.config.json) for the schema. A minimal confi
 }
 ```
 
+Relative paths in `cwd` and `envFiles` are resolved against the **config file's directory**, not the orchestrator's working directory. So `"envFiles": ["./.env", "./api/.env.local"]` looks for those files next to the config file, regardless of where you invoke `rumor` from.
+
 ## Environment variable references
 
 String fields in the config may reference environment variables with `${NAME}`.
@@ -71,6 +73,28 @@ readiness check.
   ]
 }
 ```
+
+## Examples
+
+### [`examples/fullstack/`](examples/fullstack/) — four-service stack
+
+A realistic four-service topology that exercises rumor's more interesting features:
+
+- **`db`** (postgres in docker) and **`redis`** (also docker) start in parallel.
+- **`api`** (python stdlib HTTP server) waits for both via port-based readiness checks (`dependsOn` + `until.port`).
+- **`frontend`** (python static server) waits for `api`.
+
+It also demonstrates the three-layer env merge: a central `examples/fullstack/.env`, per-service `<svc>/.env.local`, and a JSON `env` block on one service that overrides both files. Every `.env.local` overrides something visible (db's password, redis's log level, api's log level, frontend's title). Port numbers come from `.env` and flow into both docker `-p` flags and `dependsOn.until.port` checks via `${VAR}` substitution, so a single edit reconfigures the whole stack.
+
+Run:
+
+```bash
+rumor examples/fullstack/fullstack.config.json
+# or, from a clone:
+cargo run -- examples/fullstack/fullstack.config.json
+```
+
+Requires `docker`, `python3`, and free ports `5432` / `6379` / `3000` / `8080`. Open <http://localhost:8080> for the frontend; see the example's [README](examples/fullstack/README.md) for the env-precedence table and verification steps.
 
 ## Keys
 

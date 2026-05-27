@@ -1,0 +1,54 @@
+{
+  "processes": [
+    {
+      "name": "db",
+      "command": "docker",
+      "args": [
+        "run", "--rm", "--name", "rumor-example-db",
+        "-e", "POSTGRES_USER",
+        "-e", "POSTGRES_PASSWORD",
+        "-e", "POSTGRES_DB",
+        "-p", "${POSTGRES_PORT}:5432",
+        "postgres:16-alpine"
+      ],
+      "cwd": "./db",
+      "envFiles": ["./.env", "./db/.env.local"]
+    },
+    {
+      "name": "redis",
+      "command": "docker",
+      "args": [
+        "run", "--rm", "--name", "rumor-example-redis",
+        "-p", "${REDIS_PORT}:6379",
+        "redis:7-alpine",
+        "redis-server", "--loglevel", "${REDIS_LOG_LEVEL}"
+      ],
+      "cwd": "./redis",
+      "envFiles": ["./.env", "./redis/.env.local"]
+    },
+    {
+      "name": "api",
+      "command": "python3",
+      "args": ["server.py"],
+      "cwd": "./api",
+      "envFiles": ["./.env", "./api/.env.local"],
+      "dependsOn": [
+        { "name": "db",    "until": { "port": "${POSTGRES_PORT}" } },
+        { "name": "redis", "until": { "port": "${REDIS_PORT}" } }
+      ]
+    },
+    {
+      "name": "frontend",
+      "command": "python3",
+      "args": ["server.py"],
+      "cwd": "./frontend",
+      "envFiles": ["./.env", "./frontend/.env.local"],
+      "env": {
+        "LOG_LEVEL": "warn"
+      },
+      "dependsOn": [
+        { "name": "api", "until": { "port": "${API_PORT}" } }
+      ]
+    }
+  ]
+}
