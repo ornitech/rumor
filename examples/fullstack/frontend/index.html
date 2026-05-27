@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>__TITLE__</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 4em auto; padding: 0 1em; color: #222; }
+    h1 { margin-bottom: 0.2em; }
+    .muted { color: #777; font-size: 0.9em; }
+    pre { background: #f4f4f4; padding: 1em; border-radius: 6px; overflow: auto; }
+    .ok { color: #1a7f37; }
+    .err { color: #b30000; }
+  </style>
+</head>
+<body>
+  <h1>__TITLE__</h1>
+  <p class="muted">
+    Page title above comes from <code>FRONTEND_TITLE</code> (set in
+    <code>frontend/.env.local</code>, overriding the central <code>.env</code>).
+  </p>
+  <p class="muted">
+    Frontend server saw <code>LOG_LEVEL=__LOG_LEVEL__</code> at boot
+    (set by the <code>env</code> block in <code>fullstack.config.json</code>,
+    overriding both env-file layers).
+  </p>
+
+  <h2>API call</h2>
+  <p>Fetching <code id="url">__API_URL__/</code> ...</p>
+  <pre id="out">loading...</pre>
+
+  <script>
+    const url = document.getElementById("url").textContent;
+    fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        const out = document.getElementById("out");
+        out.textContent = JSON.stringify(data, null, 2);
+        const level = data && data.env && data.env.LOG_LEVEL;
+        if (level === "debug") {
+          out.insertAdjacentHTML(
+            "beforebegin",
+            '<p class="ok">api reports LOG_LEVEL=debug -> api/.env.local override worked.</p>'
+          );
+        }
+      })
+      .catch(err => {
+        const out = document.getElementById("out");
+        out.textContent = "fetch failed: " + err;
+        out.classList.add("err");
+      });
+  </script>
+</body>
+</html>

@@ -41,6 +41,47 @@ fn loads_example_config() {
 }
 
 #[test]
+fn fullstack_build_env_succeeds_for_every_service() {
+    let path = workspace_root().join("examples/fullstack/fullstack.config.json");
+    let loaded = Config::load(&path).expect("fullstack config parses");
+    for proc in &loaded.config.processes {
+        let result = env::build_env(&proc.cwd, &proc.env_files, &proc.env);
+        if let Err(e) = &result {
+            panic!("build_env failed for {}: {e:#}", proc.name);
+        }
+    }
+}
+
+#[test]
+fn loads_fullstack_example() {
+    let path = workspace_root().join("examples/fullstack/fullstack.config.json");
+    let loaded = Config::load(&path).expect("fullstack.config.json should parse");
+    let names: Vec<&str> = loaded.config.processes.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, ["db", "redis", "api", "frontend"]);
+
+    // api depends on db and redis; frontend depends on api.
+    let api = loaded.config.processes.iter().find(|p| p.name == "api").unwrap();
+    let api_deps: Vec<&str> = api.depends_on.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(api_deps, ["db", "redis"]);
+    let frontend = loaded.config.processes.iter().find(|p| p.name == "frontend").unwrap();
+    let fe_deps: Vec<&str> = frontend.depends_on.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(fe_deps, ["api"]);
+
+    // Every service points at both env files; both must have been resolved to
+    // existing files (Config::load canonicalizes & checks is_file).
+    for proc in &loaded.config.processes {
+        assert_eq!(proc.env_files.len(), 2, "{} env_files", proc.name);
+        for ef in &proc.env_files {
+            assert!(ef.is_file(), "{} env file missing: {}", proc.name, ef.display());
+        }
+    }
+
+    // The frontend service overrides LOG_LEVEL via the JSON env block — that's
+    // the "one service also overrides a config-level env var" demonstration.
+    assert_eq!(frontend.env.get("LOG_LEVEL").map(|s| s.as_str()), Some("warn"));
+}
+
+#[test]
 fn rejects_duplicate_names() {
     let dir = tempdir();
     let cfg = dir.join("dup.json");

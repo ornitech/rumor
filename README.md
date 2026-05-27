@@ -72,6 +72,28 @@ readiness check.
 }
 ```
 
+## Examples
+
+### [`examples/fullstack/`](examples/fullstack/) — four-service stack
+
+A realistic four-service topology that exercises rumor's more interesting features:
+
+- **`db`** (postgres in docker) and **`redis`** (also docker, wrapped in `bash -c` so env vars expand into args) start in parallel.
+- **`api`** (python stdlib HTTP server) waits for both via port-based readiness checks (`dependsOn` + `until.port`).
+- **`frontend`** (python static server) waits for `api`.
+
+It also demonstrates the three-layer env merge: a central `examples/fullstack/.env`, per-service `<svc>/.env.local`, and a JSON `env` block on one service that overrides both files. Every `.env.local` overrides something visible (db's password, redis's log level, api's log level, frontend's title), so each layer's effect is observable end-to-end.
+
+Run:
+
+```bash
+rumor examples/fullstack/fullstack.config.json
+# or, from a clone:
+cargo run -- examples/fullstack/fullstack.config.json
+```
+
+Requires `docker`, `python3`, and free ports `5432` / `6379` / `3000` / `8080`. Open <http://localhost:8080> for the frontend; see the example's [README](examples/fullstack/README.md) for the env-precedence table and verification steps.
+
 ## Keys
 
 Two modes: **Nav** (default) and **Focus** (keystrokes go to the selected child).
