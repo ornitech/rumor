@@ -17,11 +17,7 @@ brew install rumor
 rumor <config.json>
 ```
 
-Set `"longLived": false` on one-shot processes (migrations, seed scripts) so a
-clean `exit 0` is shown as success (green) rather than a crash (red). Defaults
-to `true`.
-
-See [`example.config.json`](example.config.json) for the schema. A minimal config:
+A minimal config:
 
 ```json
 {
@@ -32,7 +28,39 @@ See [`example.config.json`](example.config.json) for the schema. A minimal confi
 }
 ```
 
-Relative paths in `cwd` and `envFiles` are resolved against the **config file's directory**, not the orchestrator's working directory. So `"envFiles": ["./.env", "./api/.env.local"]` looks for those files next to the config file, regardless of where you invoke `rumor` from.
+See [`example.config.json`](example.config.json) for a fuller example.
+
+## Config schema
+
+Top level: `{ "processes": [ ... ] }`, where each entry is a process object.
+
+### Process object
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `name` | string | *required* | Unique within the config; shown as the tab label. |
+| `command` | string | *required* | Executable to spawn. Supports `${VAR}` substitution. |
+| `args` | string[] | `[]` | Each entry supports `${VAR}` substitution. |
+| `cwd` | string | *required* | Working directory for the spawned process. Relative paths resolve against the **config file's directory**, not where `rumor` was invoked. |
+| `env` | object&lt;string, string&gt; | `{}` | Inline env vars. Highest precedence in the env merge. |
+| `envFiles` | string[] | `[]` | Extra `.env` files loaded in order *after* `<cwd>/.env`; later files override earlier ones. Relative paths resolve against the config file's directory. |
+| `dependsOn` | dependency[] | `[]` | Readiness gates that must pass before this process starts. |
+| `longLived` | bool | `true` | If `false`, a clean `exit 0` is shown as success (green) instead of a crash (red). Use for migrations and one-shot setup scripts. |
+
+### Dependency object (`dependsOn[]`)
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | string | Name of another process in this config. Cycles and self-references are rejected at load. |
+| `until` | object | Exactly one readiness condition. See variants below. |
+
+### Readiness conditions (`dependsOn[].until`)
+
+| Key | Value type | Ready when |
+| --- | --- | --- |
+| `port` | u16, or `"${VAR}"` string | A TCP connect to `127.0.0.1:port` succeeds. |
+| `log` | string (regex) | The regex matches the dep's accumulated stdout/stderr. Supports `${VAR}` substitution. |
+| `exit` | i32, or `"${VAR}"` string | The dep process exits with this code (typically `0` for one-shot setup). |
 
 ## Environment variable references
 
