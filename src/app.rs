@@ -13,6 +13,7 @@ const NOWRAP_COLS: u16 = 1000;
 pub enum Mode {
     Nav,
     Focus,
+    Details,
 }
 
 pub struct App {
@@ -24,6 +25,7 @@ pub struct App {
     pub display_rows: u16,
     pub display_cols: u16,
     pub tab_offset: usize,
+    pub details_scroll: u16,
 }
 
 impl App {
@@ -38,6 +40,7 @@ impl App {
             display_rows,
             display_cols,
             tab_offset: 0,
+            details_scroll: 0,
         }
     }
 
@@ -84,6 +87,7 @@ impl App {
         match self.mode {
             Mode::Nav => self.handle_nav_key(key),
             Mode::Focus => self.handle_focus_key(key),
+            Mode::Details => self.handle_details_key(key),
         }
     }
 
@@ -115,10 +119,36 @@ impl App {
             }
             KeyCode::Char('k') if ctrl => self.mgr.kill_all(),
             KeyCode::Char('w') if !ctrl => self.toggle_wrap(),
+            KeyCode::Char('d') if !ctrl => {
+                self.mode = Mode::Details;
+                self.details_scroll = 0;
+            }
             KeyCode::PageUp => self.scroll_by(10),
             KeyCode::PageDown => self.scroll_by(-10),
             KeyCode::Home => self.scroll_to_top(),
             KeyCode::End => self.set_scroll(0),
+            _ => {}
+        }
+    }
+
+    fn handle_details_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('q') => {
+                self.mode = Mode::Nav;
+            }
+            KeyCode::Up => {
+                self.details_scroll = self.details_scroll.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                self.details_scroll = self.details_scroll.saturating_add(1);
+            }
+            KeyCode::PageUp => {
+                self.details_scroll = self.details_scroll.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                self.details_scroll = self.details_scroll.saturating_add(10);
+            }
+            KeyCode::Home => self.details_scroll = 0,
             _ => {}
         }
     }
