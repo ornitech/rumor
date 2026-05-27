@@ -15,6 +15,8 @@ use portable_pty::PtySize;
 mod config;
 #[path = "../src/env.rs"]
 mod env;
+#[path = "../src/template.rs"]
+mod template;
 #[path = "../src/process.rs"]
 mod process;
 

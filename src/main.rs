@@ -4,6 +4,7 @@ mod env;
 mod keys;
 mod process;
 mod status_color;
+mod template;
 mod ui;
 
 use std::io::{self, Write};

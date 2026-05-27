@@ -4,8 +4,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "lowercase")]
+use crate::env as envmod;
+use crate::template;
+
+#[derive(Debug, Clone)]
 pub enum ReadinessCondition {
     /// TCP connect to 127.0.0.1:port succeeds.
     Port(u16),
@@ -15,31 +17,25 @@ pub enum ReadinessCondition {
     Exit(i32),
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Dependency {
     pub name: String,
     pub until: ReadinessCondition,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ProcessConfig {
     pub name: String,
     pub command: String,
-    #[serde(default)]
     pub args: Vec<String>,
     pub cwd: PathBuf,
-    /// Additional env files to load after `<cwd>/.env`. Relative paths are
-    /// resolved against the config file's directory. Loaded in order; later
-    /// files override earlier ones.
-    #[serde(default, rename = "envFiles")]
+    /// Additional env files to load after `<cwd>/.env`. Loaded in order; later
+    /// files override earlier ones. Already canonicalized at load time.
     pub env_files: Vec<PathBuf>,
-    #[serde(default)]
     pub env: HashMap<String, String>,
-    #[serde(default, rename = "dependsOn")]
     pub depends_on: Vec<Dependency>,
     /// True for services that should run forever (default). False for one-shot
     /// scripts where a clean `exit 0` is success, not a crash.
-    #[serde(default = "default_long_lived", rename = "longLived")]
     pub long_lived: bool,
 }
 
@@ -47,7 +43,7 @@ fn default_long_lived() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub processes: Vec<ProcessConfig>,
 }
@@ -58,11 +54,58 @@ pub struct LoadedConfig {
     pub config_dir: PathBuf,
 }
 
+// --- Raw (pre-substitution) deserialization shapes ---------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum NumOrTemplate<N> {
+    Num(N),
+    Template(String),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RawReadinessCondition {
+    Port(NumOrTemplate<u16>),
+    Log(String),
+    Exit(NumOrTemplate<i32>),
+}
+
+#[derive(Debug, Deserialize)]
+struct RawDependency {
+    name: String,
+    until: RawReadinessCondition,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawProcessConfig {
+    name: String,
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    cwd: PathBuf,
+    #[serde(default, rename = "envFiles")]
+    env_files: Vec<PathBuf>,
+    #[serde(default)]
+    env: HashMap<String, String>,
+    #[serde(default, rename = "dependsOn")]
+    depends_on: Vec<RawDependency>,
+    #[serde(default = "default_long_lived", rename = "longLived")]
+    long_lived: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawConfig {
+    processes: Vec<RawProcessConfig>,
+}
+
+// --- Loader ------------------------------------------------------------------
+
 impl Config {
     pub fn load(path: &Path) -> Result<LoadedConfig> {
         let bytes = std::fs::read(path)
             .with_context(|| format!("reading config file {}", path.display()))?;
-        let mut config: Config = serde_json::from_slice(&bytes)
+        let raw: RawConfig = serde_json::from_slice(&bytes)
             .with_context(|| format!("parsing config file {}", path.display()))?;
 
         let config_dir = path
@@ -72,77 +115,172 @@ impl Config {
             .ok_or_else(|| anyhow!("config path has no parent directory"))?
             .to_path_buf();
 
-        if config.processes.is_empty() {
+        if raw.processes.is_empty() {
             return Err(anyhow!("config has no processes"));
         }
 
         let mut seen = HashSet::new();
-        for proc in &mut config.processes {
-            if proc.name.trim().is_empty() {
+        let mut processes: Vec<ProcessConfig> = Vec::with_capacity(raw.processes.len());
+
+        for raw_proc in raw.processes {
+            let RawProcessConfig {
+                name,
+                command,
+                args,
+                mut cwd,
+                mut env_files,
+                env,
+                depends_on,
+                long_lived,
+            } = raw_proc;
+
+            if name.trim().is_empty() {
                 return Err(anyhow!("process name cannot be empty"));
             }
-            if !seen.insert(proc.name.clone()) {
-                return Err(anyhow!("duplicate process name: {}", proc.name));
+            if !seen.insert(name.clone()) {
+                return Err(anyhow!("duplicate process name: {}", name));
             }
-            if proc.command.trim().is_empty() {
-                return Err(anyhow!("process {}: command cannot be empty", proc.name));
+            if command.trim().is_empty() {
+                return Err(anyhow!("process {}: command cannot be empty", name));
             }
 
-            if proc.cwd.is_relative() {
-                proc.cwd = config_dir.join(&proc.cwd);
+            if cwd.is_relative() {
+                cwd = config_dir.join(&cwd);
             }
-            let canonical = proc.cwd.canonicalize().with_context(|| {
+            let canonical_cwd = cwd.canonicalize().with_context(|| {
                 format!(
                     "process {}: cwd does not exist or is not accessible: {}",
-                    proc.name,
-                    proc.cwd.display()
+                    name,
+                    cwd.display()
                 )
             })?;
-            if !canonical.is_dir() {
+            if !canonical_cwd.is_dir() {
                 return Err(anyhow!(
                     "process {}: cwd is not a directory: {}",
-                    proc.name,
-                    canonical.display()
+                    name,
+                    canonical_cwd.display()
                 ));
             }
-            proc.cwd = canonical;
+            cwd = canonical_cwd;
 
-            for dep in &proc.depends_on {
-                if let ReadinessCondition::Log(rx) = &dep.until {
-                    regex::Regex::new(rx).with_context(|| {
-                        format!(
-                            "process {}: dependsOn[{}].until.log is not a valid regex",
-                            proc.name, dep.name
-                        )
-                    })?;
-                }
-            }
-
-            for ef in &mut proc.env_files {
+            for ef in &mut env_files {
                 if ef.is_relative() {
                     *ef = config_dir.join(&ef);
                 }
                 let canonical = ef.canonicalize().with_context(|| {
                     format!(
                         "process {}: envFiles entry not found: {}",
-                        proc.name,
+                        name,
                         ef.display()
                     )
                 })?;
                 if !canonical.is_file() {
                     return Err(anyhow!(
                         "process {}: envFiles entry is not a file: {}",
-                        proc.name,
+                        name,
                         canonical.display()
                     ));
                 }
                 *ef = canonical;
             }
+
+            // Build the env used both to spawn the child and to substitute
+            // ${VAR} references in this process's templated fields.
+            let subst_env = envmod::build_env(&cwd, &env_files, &env).with_context(|| {
+                format!("process {}: building env for template substitution", name)
+            })?;
+
+            // Substitute templated string fields.
+            let command = template::substitute(
+                &command,
+                &subst_env,
+                &format!("process '{name}' command"),
+            )?;
+            let mut subst_args = Vec::with_capacity(args.len());
+            for (idx, a) in args.into_iter().enumerate() {
+                subst_args.push(template::substitute(
+                    &a,
+                    &subst_env,
+                    &format!("process '{name}' args[{idx}]"),
+                )?);
+            }
+            let args = subst_args;
+
+            // Resolve dependsOn.
+            let mut deps: Vec<Dependency> = Vec::with_capacity(depends_on.len());
+            for raw_dep in depends_on {
+                let RawDependency {
+                    name: dep_name,
+                    until,
+                } = raw_dep;
+                let until = match until {
+                    RawReadinessCondition::Port(NumOrTemplate::Num(n)) => {
+                        ReadinessCondition::Port(n)
+                    }
+                    RawReadinessCondition::Port(NumOrTemplate::Template(t)) => {
+                        let ctx = format!(
+                            "process '{name}' dependsOn[{dep_name}].until.port"
+                        );
+                        let s = template::substitute(&t, &subst_env, &ctx)?;
+                        let port: u16 = s.parse().map_err(|_| {
+                            anyhow!(
+                                "{ctx}: value {:?} is not a valid u16 (range 0-65535)",
+                                s
+                            )
+                        })?;
+                        ReadinessCondition::Port(port)
+                    }
+                    RawReadinessCondition::Exit(NumOrTemplate::Num(n)) => {
+                        ReadinessCondition::Exit(n)
+                    }
+                    RawReadinessCondition::Exit(NumOrTemplate::Template(t)) => {
+                        let ctx = format!(
+                            "process '{name}' dependsOn[{dep_name}].until.exit"
+                        );
+                        let s = template::substitute(&t, &subst_env, &ctx)?;
+                        let code: i32 = s.parse().map_err(|_| {
+                            anyhow!("{ctx}: value {:?} is not a valid i32", s)
+                        })?;
+                        ReadinessCondition::Exit(code)
+                    }
+                    RawReadinessCondition::Log(rx) => {
+                        let ctx = format!(
+                            "process '{name}' dependsOn[{dep_name}].until.log"
+                        );
+                        let resolved = template::substitute(&rx, &subst_env, &ctx)?;
+                        regex::Regex::new(&resolved).with_context(|| {
+                            format!(
+                                "process {}: dependsOn[{}].until.log is not a valid regex",
+                                name, dep_name
+                            )
+                        })?;
+                        ReadinessCondition::Log(resolved)
+                    }
+                };
+                deps.push(Dependency {
+                    name: dep_name,
+                    until,
+                });
+            }
+
+            processes.push(ProcessConfig {
+                name,
+                command,
+                args,
+                cwd,
+                env_files,
+                env,
+                depends_on: deps,
+                long_lived,
+            });
         }
 
-        validate_dep_graph(&config.processes)?;
+        validate_dep_graph(&processes)?;
 
-        Ok(LoadedConfig { config, config_dir })
+        Ok(LoadedConfig {
+            config: Config { processes },
+            config_dir,
+        })
     }
 }
 
