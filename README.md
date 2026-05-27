@@ -26,6 +26,48 @@ See [`example.config.json`](example.config.json) for the schema. A minimal confi
 }
 ```
 
+## Environment variable references
+
+String fields in the config may reference environment variables with `${NAME}`.
+Use `$${NAME}` to emit a literal `${NAME}`.
+
+Substitution applies to:
+
+- `command`
+- each entry of `args`
+- `dependsOn[].until.port` and `dependsOn[].until.exit` (write them as JSON
+  strings, e.g. `"port": "${API_PORT}"`; literal numbers also still work)
+- `dependsOn[].until.log` (the regex string)
+
+The lookup uses, in order (later wins): the orchestrator's own env, then
+`<cwd>/.env`, then each `envFiles` entry, then the process's `env` block. So
+env files referenced from the config are loaded *before* substitution.
+
+A `${...}` whose contents aren't a strict identifier (e.g. `${RATE:-1}`) is
+passed through verbatim, so shell-side interpolation in `args` keeps working.
+A referenced variable that isn't set substitutes to an empty string and emits
+a warning to `~/Library/Logs/rumor/rumor.log`.
+
+Example: a single `.env` file drives both the spawned process and rumor's
+readiness check.
+
+```json
+{
+  "processes": [
+    { "name": "db", "command": "postgres", "cwd": "./db", "envFiles": ["../.env"] },
+    {
+      "name": "api",
+      "command": "./bin/api",
+      "cwd": "./api",
+      "envFiles": ["../.env"],
+      "dependsOn": [
+        { "name": "db", "until": { "port": "${DB_PORT}" } }
+      ]
+    }
+  ]
+}
+```
+
 ## Keys
 
 Two modes: **Nav** (default) and **Focus** (keystrokes go to the selected child).

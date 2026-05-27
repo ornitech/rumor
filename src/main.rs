@@ -3,6 +3,7 @@ mod config;
 mod env;
 mod keys;
 mod process;
+mod template;
 mod ui;
 
 use std::io::{self, Write};

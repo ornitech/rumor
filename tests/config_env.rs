@@ -5,8 +5,10 @@ use std::path::PathBuf;
 mod config;
 #[path = "../src/env.rs"]
 mod env;
+#[path = "../src/template.rs"]
+mod template;
 
-use config::Config;
+use config::{Config, ReadinessCondition};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -257,6 +259,227 @@ fn config_rejects_missing_env_file() {
     let err = Config::load(&cfg_path).unwrap_err().to_string();
     assert!(err.contains("envFiles"), "got: {err}");
 }
+
+// ---------------------------------------------------------------------------
+// ${VAR} substitution in config fields
+// ---------------------------------------------------------------------------
+
+fn port_of(loaded: &config::LoadedConfig, proc_idx: usize, dep_idx: usize) -> u16 {
+    match &loaded.config.processes[proc_idx].depends_on[dep_idx].until {
+        ReadinessCondition::Port(p) => *p,
+        other => panic!("expected Port, got {other:?}"),
+    }
+}
+
+#[test]
+fn port_template_resolves_from_env_block() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "db", "command": "echo", "cwd": "{0}" }},
+            {{ "name": "api", "command": "echo", "cwd": "{0}",
+               "env": {{ "API_PORT": "5432" }},
+               "dependsOn": [{{"name": "db", "until": {{"port": "${{API_PORT}}"}}}}] }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let loaded = Config::load(&cfg).expect("should load");
+    assert_eq!(port_of(&loaded, 1, 0), 5432);
+}
+
+#[test]
+fn port_template_resolves_from_env_file() {
+    let dir = tempdir();
+    std::fs::write(dir.join("ports.env"), "DB_PORT=6543\n").unwrap();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "db", "command": "echo", "cwd": "{0}" }},
+            {{ "name": "api", "command": "echo", "cwd": "{0}",
+               "envFiles": ["ports.env"],
+               "dependsOn": [{{"name": "db", "until": {{"port": "${{DB_PORT}}"}}}}] }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let loaded = Config::load(&cfg).expect("should load");
+    assert_eq!(port_of(&loaded, 1, 0), 6543);
+}
+
+#[test]
+fn port_template_resolves_from_orchestrator_env() {
+    // Unique var name so this test does not race with anything else.
+    let var = "RUMOR_TEST_ORCH_PORT_8FB2";
+    // SAFETY: process-wide env mutation. The var name is unique to this test.
+    unsafe { std::env::set_var(var, "7777"); }
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "db", "command": "echo", "cwd": "{0}" }},
+            {{ "name": "api", "command": "echo", "cwd": "{0}",
+               "dependsOn": [{{"name": "db", "until": {{"port": "${{{var}}}"}}}}] }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let loaded = Config::load(&cfg).expect("should load");
+    assert_eq!(port_of(&loaded, 1, 0), 7777);
+    // SAFETY: cleanup, same justification.
+    unsafe { std::env::remove_var(var); }
+}
+
+#[test]
+fn port_template_unknown_var_substitutes_empty_then_fails_parse() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "db", "command": "echo", "cwd": "{0}" }},
+            {{ "name": "api", "command": "echo", "cwd": "{0}",
+               "dependsOn": [{{"name": "db", "until": {{"port": "${{NOPE_THIS_IS_UNSET_1234}}"}}}}] }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let err = Config::load(&cfg).unwrap_err().to_string();
+    assert!(err.contains("not a valid u16"), "got: {err}");
+    assert!(err.contains("until.port"), "got: {err}");
+}
+
+#[test]
+fn port_template_non_numeric_value_errors() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "db", "command": "echo", "cwd": "{0}" }},
+            {{ "name": "api", "command": "echo", "cwd": "{0}",
+               "env": {{ "P": "hello" }},
+               "dependsOn": [{{"name": "db", "until": {{"port": "${{P}}"}}}}] }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let err = Config::load(&cfg).unwrap_err().to_string();
+    assert!(err.contains("not a valid u16"), "got: {err}");
+}
+
+#[test]
+fn port_literal_number_still_works() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "db", "command": "echo", "cwd": "{0}" }},
+            {{ "name": "api", "command": "echo", "cwd": "{0}",
+               "dependsOn": [{{"name": "db", "until": {{"port": 5432}}}}] }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let loaded = Config::load(&cfg).expect("should load");
+    assert_eq!(port_of(&loaded, 1, 0), 5432);
+}
+
+#[test]
+fn log_template_resolves_then_regex_compiles() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "db", "command": "echo", "cwd": "{0}" }},
+            {{ "name": "api", "command": "echo", "cwd": "{0}",
+               "env": {{ "MARKER": "ready" }},
+               "dependsOn": [{{"name": "db", "until": {{"log": "^${{MARKER}}$"}}}}] }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let loaded = Config::load(&cfg).expect("should load");
+    match &loaded.config.processes[1].depends_on[0].until {
+        ReadinessCondition::Log(rx) => assert_eq!(rx, "^ready$"),
+        other => panic!("expected Log, got {other:?}"),
+    }
+}
+
+#[test]
+fn escaped_dollar_is_literal_in_args() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "a", "command": "echo", "cwd": "{0}",
+               "args": ["$${{RATE}}"] }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let loaded = Config::load(&cfg).expect("should load");
+    assert_eq!(loaded.config.processes[0].args, vec!["${RATE}".to_string()]);
+}
+
+#[test]
+fn command_and_args_substituted_from_env_block() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "a", "command": "${{RUNNER}}", "cwd": "{0}",
+               "args": ["--flag=${{FLAG}}"],
+               "env": {{ "RUNNER": "bash", "FLAG": "on" }} }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let loaded = Config::load(&cfg).expect("should load");
+    assert_eq!(loaded.config.processes[0].command, "bash");
+    assert_eq!(
+        loaded.config.processes[0].args,
+        vec!["--flag=on".to_string()]
+    );
+}
+
+#[test]
+fn exit_template_resolves() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "a", "command": "echo", "cwd": "{0}" }},
+            {{ "name": "b", "command": "echo", "cwd": "{0}",
+               "env": {{ "EXP": "0" }},
+               "dependsOn": [{{"name": "a", "until": {{"exit": "${{EXP}}"}}}}] }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let loaded = Config::load(&cfg).expect("should load");
+    match &loaded.config.processes[1].depends_on[0].until {
+        ReadinessCondition::Exit(code) => assert_eq!(*code, 0),
+        other => panic!("expected Exit, got {other:?}"),
+    }
+}
+
+#[test]
+fn unterminated_template_errors() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "a", "command": "echo", "cwd": "{0}",
+               "args": ["${{BAD"] }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let err = Config::load(&cfg).unwrap_err().to_string();
+    assert!(err.contains("unterminated"), "got: {err}");
+}
+
+// ---------------------------------------------------------------------------
 
 fn tempdir() -> PathBuf {
     let base = std::env::temp_dir().join(format!(
