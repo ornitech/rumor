@@ -1,5 +1,7 @@
 # rumor
 
+![rumor demo](demo.gif)
+
 Multi-process TUI orchestrator. Run a JSON-configured set of long-lived processes side by side in one terminal, each in its own PTY tab with full ANSI rendering and interactive input.
 
 ## Install
