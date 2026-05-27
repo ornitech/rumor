@@ -7,6 +7,7 @@ use tui_term::widget::PseudoTerminal;
 
 use crate::app::{App, Mode};
 use crate::process::{Slot, Status};
+use crate::status_color::exited_color;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -220,7 +221,9 @@ fn tab_dot_color(app: &App, idx: usize) -> Color {
         Slot::Process(p) => match p.status() {
             Status::Starting => Color::Yellow,
             Status::Running => Color::Green,
-            Status::Exited(_) => Color::Red,
+            Status::Exited(info) => {
+                exited_color(info.code, info.signal.is_some(), p.long_lived)
+            }
             Status::SpawnFailed(_) => Color::Magenta,
         },
     }
@@ -239,7 +242,8 @@ fn slot_status_span(app: &App, idx: usize) -> Span<'static> {
             Status::Starting => Span::styled("starting", Style::default().fg(Color::Yellow)),
             Status::Running => Span::styled("running", Style::default().fg(Color::Green)),
             Status::Exited(info) => {
-                Span::styled(format!("exited ({info})"), Style::default().fg(Color::Red))
+                let color = exited_color(info.code, info.signal.is_some(), p.long_lived);
+                Span::styled(format!("exited ({info})"), Style::default().fg(color))
             }
             Status::SpawnFailed(err) => Span::styled(
                 format!("spawn failed: {err}"),
@@ -248,3 +252,4 @@ fn slot_status_span(app: &App, idx: usize) -> Span<'static> {
         },
     }
 }
+

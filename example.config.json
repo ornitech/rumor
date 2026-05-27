@@ -26,6 +26,16 @@
       "env": {
         "PS1": "py> "
       }
+    },
+    {
+      "name": "migration",
+      "command": "bash",
+      "args": [
+        "-c",
+        "printf '\\033[32mrunning migration...\\033[0m\\n'; sleep 1; printf '\\033[32mdone\\033[0m\\n'; exit 0"
+      ],
+      "cwd": "./demo/counter",
+      "longLived": false
     }
   ]
 }
