@@ -37,6 +37,14 @@ pub struct ProcessConfig {
     pub env: HashMap<String, String>,
     #[serde(default, rename = "dependsOn")]
     pub depends_on: Vec<Dependency>,
+    /// True for services that should run forever (default). False for one-shot
+    /// scripts where a clean `exit 0` is success, not a crash.
+    #[serde(default = "default_long_lived", rename = "longLived")]
+    pub long_lived: bool,
+}
+
+fn default_long_lived() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]

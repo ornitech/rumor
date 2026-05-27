@@ -3,6 +3,7 @@ mod config;
 mod env;
 mod keys;
 mod process;
+mod status_color;
 mod ui;
 
 use std::io::{self, Write};
