@@ -30,6 +30,8 @@ See [`example.config.json`](example.config.json) for the schema. A minimal confi
 }
 ```
 
+Relative paths in `cwd` and `envFiles` are resolved against the **config file's directory**, not the orchestrator's working directory. So `"envFiles": ["./.env", "./api/.env.local"]` looks for those files next to the config file, regardless of where you invoke `rumor` from.
+
 ## Environment variable references
 
 String fields in the config may reference environment variables with `${NAME}`.
