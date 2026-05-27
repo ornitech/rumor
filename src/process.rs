@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -49,6 +49,10 @@ pub struct Process {
     /// Copied from `ProcessConfig::long_lived`. UI uses this to decide whether
     /// a clean `exit 0` is success (false) or an unexpected stop (true).
     pub long_lived: bool,
+    /// Snapshot of the resolved env passed to the child at spawn time. Sorted
+    /// for deterministic display. Source of truth for "what did this PID see"
+    /// even after the `.env` files on disk change.
+    pub env: BTreeMap<String, String>,
     pub parser: Arc<Mutex<vt100::Parser>>,
     /// Tee of every byte read from the PTY, capped at RAW_CAP. Used to replay
     /// scrollback into a fresh parser on resize so wrap toggles and window
@@ -87,6 +91,15 @@ impl Process {
         if !child_env.contains_key("TERM") {
             cmd.env("TERM", "xterm-256color");
         }
+        // Snapshot the resolved env (including the TERM fallback) for the
+        // details overlay. BTreeMap gives alphabetical order for free.
+        let mut env_snapshot: BTreeMap<String, String> = child_env
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        env_snapshot
+            .entry("TERM".to_string())
+            .or_insert_with(|| "xterm-256color".to_string());
 
         let child = pair
             .slave
@@ -134,6 +147,7 @@ impl Process {
         Ok(Self {
             name: cfg.name.clone(),
             long_lived: cfg.long_lived,
+            env: env_snapshot,
             parser,
             raw,
             status_rx,

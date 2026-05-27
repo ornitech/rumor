@@ -22,7 +22,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .split(area);
 
     draw_tabs(frame, app, chunks[0]);
-    draw_body(frame, app, chunks[1]);
+    if app.mode == Mode::Details {
+        draw_details_body(frame, app, chunks[1]);
+    } else {
+        draw_body(frame, app, chunks[1]);
+    }
     draw_status(frame, app, chunks[2]);
 }
 
@@ -182,6 +186,10 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             " FOCUS ",
             Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
         ),
+        Mode::Details => Span::styled(
+            " DETAILS ",
+            Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD),
+        ),
     };
 
     let status_span = slot_status_span(app, app.selected);
@@ -197,8 +205,9 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     let hints = match app.mode {
-        Mode::Nav => "  ←/→ tabs · ↑/↓ scroll · PgUp/PgDn ×10 · Enter focus · r restart · k kill · w wrap · ^R restart-all · ^K kill-all · q quit",
+        Mode::Nav => "  ←/→ tabs · ↑/↓ scroll · Enter focus · r restart · k kill · w wrap · d details · ^R/^K all · q quit",
         Mode::Focus => "  Esc leave focus · all other keys go to the process",
+        Mode::Details => "  ↑/↓ scroll · PgUp/PgDn ×10 · Home top · d/Esc close",
     };
 
     let line = Line::from(vec![
@@ -251,5 +260,145 @@ fn slot_status_span(app: &App, idx: usize) -> Span<'static> {
             ),
         },
     }
+}
+
+fn draw_details_body(frame: &mut Frame, app: &App, area: Rect) {
+    let idx = app.selected;
+    let cfg = match app.mgr.configs().get(idx) {
+        Some(c) => c,
+        None => return,
+    };
+    let slot = app.mgr.slot(idx);
+
+    let label_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let value_style = Style::default().fg(Color::White);
+    let dim_style = Style::default().fg(Color::DarkGray);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    lines.push(Line::from(Span::styled(
+        cfg.name.clone(),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::raw(""));
+
+    let pid_text = match &slot {
+        Slot::Process(p) => p.pid().to_string(),
+        _ => "—".to_string(),
+    };
+    lines.push(Line::from(vec![
+        Span::styled("PID:    ", label_style),
+        Span::styled(pid_text, value_style),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Status: ", label_style),
+        slot_status_span(app, idx),
+    ]));
+
+    lines.push(Line::raw(""));
+    lines.push(Line::from(vec![
+        Span::styled("Command: ", label_style),
+        Span::styled(cfg.command.clone(), value_style),
+    ]));
+    let args_str = if cfg.args.is_empty() {
+        "(none)".to_string()
+    } else {
+        cfg.args.join(" ")
+    };
+    lines.push(Line::from(vec![
+        Span::styled("Args:    ", label_style),
+        Span::styled(args_str, value_style),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("CWD:     ", label_style),
+        Span::styled(cfg.cwd.display().to_string(), value_style),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Long-lived: ", label_style),
+        Span::styled(cfg.long_lived.to_string(), value_style),
+    ]));
+
+    lines.push(Line::raw(""));
+    if cfg.env_files.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("Env files: ", label_style),
+            Span::styled("(none)", dim_style),
+        ]));
+    } else {
+        lines.push(Line::from(Span::styled("Env files:", label_style)));
+        for ef in &cfg.env_files {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(ef.display().to_string(), value_style),
+            ]));
+        }
+    }
+
+    if !cfg.depends_on.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::from(Span::styled("Depends on:", label_style)));
+        for dep in &cfg.depends_on {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(dep.name.clone(), value_style),
+                Span::styled(format!(" until {:?}", dep.until), dim_style),
+            ]));
+        }
+    }
+
+    lines.push(Line::raw(""));
+    match &slot {
+        Slot::Process(p) => {
+            lines.push(Line::from(Span::styled(
+                format!("Environment ({} vars):", p.env.len()),
+                label_style,
+            )));
+            for (k, v) in &p.env {
+                lines.push(Line::from(vec![
+                    Span::styled(k.clone(), Style::default().fg(Color::Green)),
+                    Span::raw("="),
+                    Span::styled(v.clone(), value_style),
+                ]));
+            }
+        }
+        _ => {
+            lines.push(Line::from(Span::styled(
+                "Environment:",
+                label_style,
+            )));
+            lines.push(Line::from(Span::styled(
+                "  (not spawned — env not yet resolved)",
+                dim_style,
+            )));
+            if !cfg.env.is_empty() {
+                lines.push(Line::raw(""));
+                lines.push(Line::from(Span::styled(
+                    format!("Config env overrides ({}):", cfg.env.len()),
+                    label_style,
+                )));
+                let mut keys: Vec<&String> = cfg.env.keys().collect();
+                keys.sort();
+                for k in keys {
+                    let v = &cfg.env[k];
+                    lines.push(Line::from(vec![
+                        Span::styled(k.clone(), Style::default().fg(Color::Green)),
+                        Span::raw("="),
+                        Span::styled(v.clone(), value_style),
+                    ]));
+                }
+            }
+        }
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" details: {} ", cfg.name));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .scroll((app.details_scroll, 0));
+    frame.render_widget(paragraph, area);
 }
 
