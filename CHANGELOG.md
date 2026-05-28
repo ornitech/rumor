@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/ornitech/rumor/compare/v0.3.0...v0.4.0) (2026-05-27)
+
+
+### Features
+
+* **ui:** add 'd' hotkey for process details screen ([#9](https://github.com/ornitech/rumor/issues/9)) ([3e76fd6](https://github.com/ornitech/rumor/commit/3e76fd6fe7e901e91197710d6414eaf5dab14a7d))
+
 ## [0.3.0](https://github.com/ornitech/rumor/compare/v0.2.0...v0.3.0) (2026-05-27)
 
 
