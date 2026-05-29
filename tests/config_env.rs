@@ -45,7 +45,7 @@ fn fullstack_build_env_succeeds_for_every_service() {
     let path = workspace_root().join("examples/fullstack/fullstack.config.json");
     let loaded = Config::load(&path).expect("fullstack config parses");
     for proc in &loaded.config.processes {
-        let result = env::build_env(&proc.cwd, &proc.env_files, &proc.env);
+        let result = env::build_env(&proc.cwd, &proc.global_env_files, &proc.env_files, &proc.env);
         if let Err(e) = &result {
             panic!("build_env failed for {}: {e:#}", proc.name);
         }
@@ -67,11 +67,13 @@ fn loads_fullstack_example() {
     let fe_deps: Vec<&str> = frontend.depends_on.iter().map(|d| d.name.as_str()).collect();
     assert_eq!(fe_deps, ["api"]);
 
-    // Every service points at both env files; both must have been resolved to
-    // existing files (Config::load canonicalizes & checks is_file).
+    // The shared env now lives in the root envFiles; each service keeps its own
+    // .env.local. All paths must resolve to existing files (Config::load
+    // canonicalizes & checks is_file).
     for proc in &loaded.config.processes {
-        assert_eq!(proc.env_files.len(), 2, "{} env_files", proc.name);
-        for ef in &proc.env_files {
+        assert_eq!(proc.global_env_files.len(), 1, "{} global_env_files", proc.name);
+        assert_eq!(proc.env_files.len(), 1, "{} env_files", proc.name);
+        for ef in proc.global_env_files.iter().chain(proc.env_files.iter()) {
             assert!(ef.is_file(), "{} env file missing: {}", proc.name, ef.display());
         }
     }
@@ -123,7 +125,7 @@ fn dotenv_is_loaded_from_cwd() {
     let mut overrides = HashMap::new();
     overrides.insert("BOTH".to_string(), "explicit".to_string());
 
-    let merged = env::build_env(&dir, &[], &overrides).unwrap();
+    let merged = env::build_env(&dir, &[], &[], &overrides).unwrap();
     assert_eq!(merged.get("FROM_DOTENV").map(String::as_str), Some("42"));
     // JSON env block beats .env.
     assert_eq!(merged.get("BOTH").map(String::as_str), Some("explicit"));
@@ -136,7 +138,7 @@ fn dotenv_is_loaded_from_cwd() {
 #[test]
 fn no_dotenv_is_fine() {
     let dir = tempdir();
-    let merged = env::build_env(&dir, &[], &HashMap::new()).unwrap();
+    let merged = env::build_env(&dir, &[], &[], &HashMap::new()).unwrap();
     assert!(!merged.contains_key("FROM_DOTENV"));
 }
 
@@ -149,7 +151,7 @@ fn env_files_load_in_order_and_override_dotenv() {
     std::fs::write(&f1, "A=first\nB=first\n").unwrap();
     std::fs::write(&f2, "B=second\nC=second\n").unwrap();
 
-    let merged = env::build_env(&dir, &[f1, f2], &HashMap::new()).unwrap();
+    let merged = env::build_env(&dir, &[], &[f1, f2], &HashMap::new()).unwrap();
     // .env-only key survives.
     assert_eq!(merged.get("L").map(String::as_str), Some("dotenv"));
     // first.env overrides .env.
@@ -168,7 +170,7 @@ fn json_env_beats_env_files() {
     let mut explicit = HashMap::new();
     explicit.insert("K".to_string(), "from-json".to_string());
 
-    let merged = env::build_env(&dir, &[f], &explicit).unwrap();
+    let merged = env::build_env(&dir, &[], &[f], &explicit).unwrap();
     assert_eq!(merged.get("K").map(String::as_str), Some("from-json"));
 }
 
@@ -311,6 +313,154 @@ fn config_rejects_missing_env_file() {
     std::fs::write(&cfg_path, body).unwrap();
     let err = Config::load(&cfg_path).unwrap_err().to_string();
     assert!(err.contains("envFiles"), "got: {err}");
+}
+
+// ---------------------------------------------------------------------------
+// root-level (global) envFiles
+// ---------------------------------------------------------------------------
+
+#[test]
+fn global_env_files_are_lowest_config_precedence() {
+    let dir = tempdir();
+    // Each later source overrides the global file's value for K.
+    let g = dir.join("global.env");
+    std::fs::write(&g, "K=global\nGLOBAL_ONLY=yes\n").unwrap();
+    std::fs::write(dir.join(".env"), "K=dotenv\n").unwrap();
+    let f = dir.join("proc.env");
+    std::fs::write(&f, "K=procfile\n").unwrap();
+    let globals = vec![g];
+
+    // global < dotenv: dotenv wins.
+    let m = env::build_env(&dir, &globals, &[], &HashMap::new()).unwrap();
+    assert_eq!(m.get("K").map(String::as_str), Some("dotenv"));
+    assert_eq!(m.get("GLOBAL_ONLY").map(String::as_str), Some("yes"));
+
+    // global < per-process envFiles.
+    let no_dotenv = tempdir();
+    let m = env::build_env(&no_dotenv, &globals, &[f], &HashMap::new()).unwrap();
+    assert_eq!(m.get("K").map(String::as_str), Some("procfile"));
+
+    // global < json env block.
+    let mut json = HashMap::new();
+    json.insert("K".to_string(), "json".to_string());
+    let m = env::build_env(&no_dotenv, &globals, &[], &json).unwrap();
+    assert_eq!(m.get("K").map(String::as_str), Some("json"));
+}
+
+#[test]
+fn global_env_files_load_in_order() {
+    let dir = tempdir();
+    let g1 = dir.join("g1.env");
+    let g2 = dir.join("g2.env");
+    std::fs::write(&g1, "A=one\nB=one\n").unwrap();
+    std::fs::write(&g2, "B=two\n").unwrap();
+    let m = env::build_env(&dir, &[g1, g2], &[], &HashMap::new()).unwrap();
+    assert_eq!(m.get("A").map(String::as_str), Some("one"));
+    assert_eq!(m.get("B").map(String::as_str), Some("two"));
+}
+
+#[test]
+fn root_env_files_apply_to_every_process() {
+    let dir = tempdir();
+    let cwd_a = dir.join("a");
+    let cwd_b = dir.join("b");
+    std::fs::create_dir_all(&cwd_a).unwrap();
+    std::fs::create_dir_all(&cwd_b).unwrap();
+    std::fs::write(dir.join(".env.shared"), "SHARED=global\n").unwrap();
+
+    let cfg_path = dir.join("conf.json");
+    let body = format!(
+        r#"{{
+            "envFiles": [".env.shared"],
+            "processes": [
+                {{ "name": "a", "command": "echo", "cwd": "{}" }},
+                {{ "name": "b", "command": "echo", "cwd": "{}" }}
+            ]
+        }}"#,
+        cwd_a.display(),
+        cwd_b.display()
+    );
+    std::fs::write(&cfg_path, body).unwrap();
+    let loaded = Config::load(&cfg_path).expect("config should load");
+
+    for proc in &loaded.config.processes {
+        assert_eq!(proc.global_env_files.len(), 1, "{} global_env_files", proc.name);
+        let merged =
+            env::build_env(&proc.cwd, &proc.global_env_files, &proc.env_files, &proc.env)
+                .unwrap();
+        assert_eq!(
+            merged.get("SHARED").map(String::as_str),
+            Some("global"),
+            "{} should see the global env",
+            proc.name
+        );
+    }
+}
+
+#[test]
+fn config_resolves_relative_root_env_files_against_config_dir() {
+    let dir = tempdir();
+    let cwd = dir.join("proc");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::write(dir.join("root.env"), "ROOT=yes\n").unwrap();
+
+    let cfg_path = dir.join("conf.json");
+    let body = format!(
+        r#"{{
+            "envFiles": ["root.env"],
+            "processes": [
+                {{ "name": "a", "command": "echo", "cwd": "{}" }}
+            ]
+        }}"#,
+        cwd.display()
+    );
+    std::fs::write(&cfg_path, body).unwrap();
+    let loaded = Config::load(&cfg_path).expect("config should load");
+    let g = &loaded.config.processes[0].global_env_files;
+    assert_eq!(g.len(), 1);
+    assert!(g[0].is_absolute(), "root envFiles entry should be canonicalized");
+    assert!(g[0].ends_with("root.env"));
+}
+
+#[test]
+fn config_rejects_missing_root_env_file() {
+    let dir = tempdir();
+    let cfg_path = dir.join("conf.json");
+    let body = format!(
+        r#"{{
+            "envFiles": ["nope.env"],
+            "processes": [
+                {{ "name": "a", "command": "echo", "cwd": "{}" }}
+            ]
+        }}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg_path, body).unwrap();
+    let err = Config::load(&cfg_path).unwrap_err().to_string();
+    assert!(err.contains("root"), "got: {err}");
+    assert!(err.contains("envFiles"), "got: {err}");
+}
+
+#[test]
+fn root_env_file_value_resolves_template() {
+    let dir = tempdir();
+    let cwd = dir.join("proc");
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::write(dir.join(".env"), "API_PORT=8080\n").unwrap();
+
+    let cfg_path = dir.join("conf.json");
+    let body = format!(
+        r#"{{
+            "envFiles": [".env"],
+            "processes": [
+                {{ "name": "a", "command": "echo", "cwd": "{}", "args": ["${{API_PORT}}"] }}
+            ]
+        }}"#,
+        cwd.display()
+    );
+    std::fs::write(&cfg_path, body).unwrap();
+    let loaded = Config::load(&cfg_path).expect("config should load");
+    assert_eq!(loaded.config.processes[0].args, vec!["8080".to_string()]);
 }
 
 // ---------------------------------------------------------------------------

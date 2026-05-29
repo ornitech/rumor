@@ -32,6 +32,9 @@ pub struct ProcessConfig {
     /// Additional env files to load after `<cwd>/.env`. Loaded in order; later
     /// files override earlier ones. Already canonicalized at load time.
     pub env_files: Vec<PathBuf>,
+    /// Root-level env files, shared by all processes. Loaded before `<cwd>/.env`;
+    /// lowest config-declared precedence. Canonicalized at load time.
+    pub global_env_files: Vec<PathBuf>,
     pub env: HashMap<String, String>,
     pub depends_on: Vec<Dependency>,
     /// True for services that should run forever (default). False for one-shot
@@ -96,6 +99,8 @@ struct RawProcessConfig {
 
 #[derive(Debug, Deserialize)]
 struct RawConfig {
+    #[serde(default, rename = "envFiles")]
+    env_files: Vec<PathBuf>,
     processes: Vec<RawProcessConfig>,
 }
 
@@ -118,6 +123,10 @@ impl Config {
         if raw.processes.is_empty() {
             return Err(anyhow!("config has no processes"));
         }
+
+        // Root-level env files, shared by every process. Resolved once.
+        let mut global_env_files = raw.env_files;
+        canonicalize_env_files(&mut global_env_files, &config_dir, "root")?;
 
         let mut seen = HashSet::new();
         let mut processes: Vec<ProcessConfig> = Vec::with_capacity(raw.processes.len());
@@ -163,32 +172,14 @@ impl Config {
             }
             cwd = canonical_cwd;
 
-            for ef in &mut env_files {
-                if ef.is_relative() {
-                    *ef = config_dir.join(&ef);
-                }
-                let canonical = ef.canonicalize().with_context(|| {
-                    format!(
-                        "process {}: envFiles entry not found: {}",
-                        name,
-                        ef.display()
-                    )
-                })?;
-                if !canonical.is_file() {
-                    return Err(anyhow!(
-                        "process {}: envFiles entry is not a file: {}",
-                        name,
-                        canonical.display()
-                    ));
-                }
-                *ef = canonical;
-            }
+            canonicalize_env_files(&mut env_files, &config_dir, &format!("process {name}"))?;
 
             // Build the env used both to spawn the child and to substitute
             // ${VAR} references in this process's templated fields.
-            let subst_env = envmod::build_env(&cwd, &env_files, &env).with_context(|| {
-                format!("process {}: building env for template substitution", name)
-            })?;
+            let subst_env = envmod::build_env(&cwd, &global_env_files, &env_files, &env)
+                .with_context(|| {
+                    format!("process {}: building env for template substitution", name)
+                })?;
 
             // Substitute templated string fields.
             let command = template::substitute(
@@ -269,6 +260,7 @@ impl Config {
                 args,
                 cwd,
                 env_files,
+                global_env_files: global_env_files.clone(),
                 env,
                 depends_on: deps,
                 long_lived,
@@ -282,6 +274,28 @@ impl Config {
             config_dir,
         })
     }
+}
+
+/// Resolve each env file path against `config_dir` (if relative), canonicalize
+/// it, and verify it is an existing regular file. `ctx` labels errors (e.g.
+/// `"root"` or `"process api"`). Paths are replaced in place.
+fn canonicalize_env_files(files: &mut [PathBuf], config_dir: &Path, ctx: &str) -> Result<()> {
+    for ef in files {
+        if ef.is_relative() {
+            *ef = config_dir.join(&ef);
+        }
+        let canonical = ef.canonicalize().with_context(|| {
+            format!("{ctx}: envFiles entry not found: {}", ef.display())
+        })?;
+        if !canonical.is_file() {
+            return Err(anyhow!(
+                "{ctx}: envFiles entry is not a file: {}",
+                canonical.display()
+            ));
+        }
+        *ef = canonical;
+    }
+    Ok(())
 }
 
 /// Validate that all `dependsOn` references resolve to a process in the config
