@@ -1,4 +1,5 @@
 {
+  "envFiles": ["./.env"],
   "processes": [
     {
       "name": "db",
@@ -12,7 +13,7 @@
         "postgres:16-alpine"
       ],
       "cwd": "./db",
-      "envFiles": ["./.env", "./db/.env.local"]
+      "envFiles": ["./db/.env.local"]
     },
     {
       "name": "redis",
@@ -24,14 +25,14 @@
         "redis-server", "--loglevel", "${REDIS_LOG_LEVEL}"
       ],
       "cwd": "./redis",
-      "envFiles": ["./.env", "./redis/.env.local"]
+      "envFiles": ["./redis/.env.local"]
     },
     {
       "name": "api",
       "command": "python3",
       "args": ["server.py"],
       "cwd": "./api",
-      "envFiles": ["./.env", "./api/.env.local"],
+      "envFiles": ["./api/.env.local"],
       "dependsOn": [
         { "name": "db",    "until": { "port": "${POSTGRES_PORT}" } },
         { "name": "redis", "until": { "port": "${REDIS_PORT}" } }
@@ -42,7 +43,7 @@
       "command": "python3",
       "args": ["server.py"],
       "cwd": "./frontend",
-      "envFiles": ["./.env", "./frontend/.env.local"],
+      "envFiles": ["./frontend/.env.local"],
       "env": {
         "LOG_LEVEL": "warn"
       },

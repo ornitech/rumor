@@ -48,8 +48,11 @@ Open the frontend at <http://localhost:8080> and the api at <http://localhost:30
 There are three layers, loaded in this order (later wins), per `src/env.rs`:
 
 1. orchestrator's own environment
-2. `envFiles` paths in `fullstack.config.json` (here: central `./.env`, then `./<service>/.env.local`) — relative paths resolve against the **config file's directory**, not the service's `cwd`
-3. the JSON `env` block on the service
+2. the top-level (global) `envFiles` in `fullstack.config.json` — the central `./.env`, declared once and shared by every service (lowest config precedence)
+3. each service's own `envFiles` (here: `./<service>/.env.local`)
+4. the JSON `env` block on the service
+
+Relative paths in either `envFiles` resolve against the **config file's directory**, not the service's `cwd`.
 
 | Variable            | Central `.env`              | `<svc>/.env.local`                       | JSON `env`               | Final value (which service) |
 | ------------------- | --------------------------- | ---------------------------------------- | ------------------------ | --------------------------- |

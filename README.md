@@ -32,7 +32,15 @@ See [`example.config.json`](example.config.json) for a fuller example.
 
 ## Config schema
 
-Top level: `{ "processes": [ ... ] }`, where each entry is a process object.
+Top level: `{ "envFiles": [ ... ], "processes": [ ... ] }`, where each entry of
+`processes` is a process object.
+
+### Top level
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `processes` | process[] | *required* | The processes to run. Must be non-empty. |
+| `envFiles` | string[] | `[]` | Global `.env` files loaded for **every** process, in order. Lowest precedence in the env merge (below each process's own `<cwd>/.env`, `envFiles`, and `env`). Relative paths resolve against the config file's directory. Use for a shared monorepo root `.env`/`.env.local` so each process doesn't have to declare it. |
 
 ### Process object
 
@@ -75,27 +83,29 @@ Substitution applies to:
   strings, e.g. `"port": "${API_PORT}"`; literal numbers also still work)
 - `dependsOn[].until.log` (the regex string)
 
-The lookup uses, in order (later wins): the orchestrator's own env, then
-`<cwd>/.env`, then each `envFiles` entry, then the process's `env` block. So
-env files referenced from the config are loaded *before* substitution.
+The lookup uses, in order (later wins): the orchestrator's own env, then the
+top-level (global) `envFiles`, then `<cwd>/.env`, then each per-process
+`envFiles` entry, then the process's `env` block. So env files referenced from
+the config are loaded *before* substitution.
 
 A `${...}` whose contents aren't a strict identifier (e.g. `${RATE:-1}`) is
 passed through verbatim, so shell-side interpolation in `args` keeps working.
 A referenced variable that isn't set substitutes to an empty string and emits
 a warning to `~/Library/Logs/rumor/rumor.log`.
 
-Example: a single `.env` file drives both the spawned process and rumor's
+Example: a single root `.env` file is shared by every process (declared once in
+the top-level `envFiles`) and drives both the spawned processes and rumor's
 readiness check.
 
 ```json
 {
+  "envFiles": ["./.env"],
   "processes": [
-    { "name": "db", "command": "postgres", "cwd": "./db", "envFiles": ["../.env"] },
+    { "name": "db", "command": "postgres", "cwd": "./db" },
     {
       "name": "api",
       "command": "./bin/api",
       "cwd": "./api",
-      "envFiles": ["../.env"],
       "dependsOn": [
         { "name": "db", "until": { "port": "${DB_PORT}" } }
       ]
@@ -114,7 +124,7 @@ A realistic four-service topology that exercises rumor's more interesting featur
 - **`api`** (python stdlib HTTP server) waits for both via port-based readiness checks (`dependsOn` + `until.port`).
 - **`frontend`** (python static server) waits for `api`.
 
-It also demonstrates the three-layer env merge: a central `examples/fullstack/.env`, per-service `<svc>/.env.local`, and a JSON `env` block on one service that overrides both files. Every `.env.local` overrides something visible (db's password, redis's log level, api's log level, frontend's title). Port numbers come from `.env` and flow into both docker `-p` flags and `dependsOn.until.port` checks via `${VAR}` substitution, so a single edit reconfigures the whole stack.
+It also demonstrates the three-layer env merge: a central `examples/fullstack/.env` declared **once** in the top-level `envFiles` and shared by every service, per-service `<svc>/.env.local`, and a JSON `env` block on one service that overrides both files. Every `.env.local` overrides something visible (db's password, redis's log level, api's log level, frontend's title). Port numbers come from the shared `.env` and flow into both docker `-p` flags and `dependsOn.until.port` checks via `${VAR}` substitution, so a single edit reconfigures the whole stack.
 
 Run:
 

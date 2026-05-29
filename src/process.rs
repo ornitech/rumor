@@ -82,7 +82,7 @@ impl Process {
 
         // Clear inherited env so we control what the child sees.
         cmd.env_clear();
-        let child_env = env::build_env(&cfg.cwd, &cfg.env_files, &cfg.env)
+        let child_env = env::build_env(&cfg.cwd, &cfg.global_env_files, &cfg.env_files, &cfg.env)
             .with_context(|| format!("building env for {}", cfg.name))?;
         for (k, v) in &child_env {
             cmd.env(k, v);

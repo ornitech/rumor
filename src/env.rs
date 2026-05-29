@@ -7,15 +7,22 @@ use anyhow::{Context, Result};
 ///
 /// Merge order (later wins):
 /// 1. The orchestrator's own env (so PATH, HOME, etc. propagate).
-/// 2. `<cwd>/.env` if it exists (auto-discovered, never mutates our own env).
-/// 3. Each path in `env_files`, in order.
-/// 4. The JSON config's `env` block (explicit overrides).
+/// 2. Each path in `global_env_files` (root-level, shared by all processes), in
+///    order. Lowest config-declared precedence.
+/// 3. `<cwd>/.env` if it exists (auto-discovered, never mutates our own env).
+/// 4. Each path in `env_files`, in order.
+/// 5. The JSON config's `env` block (explicit overrides).
 pub fn build_env(
     cwd: &Path,
+    global_env_files: &[std::path::PathBuf],
     env_files: &[std::path::PathBuf],
     json_env: &HashMap<String, String>,
 ) -> Result<HashMap<String, String>> {
     let mut env: HashMap<String, String> = std::env::vars().collect();
+
+    for path in global_env_files {
+        load_into(path, &mut env)?;
+    }
 
     let dotenv_path = cwd.join(".env");
     if dotenv_path.is_file() {
