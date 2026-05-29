@@ -78,9 +78,9 @@ impl App {
             pixel_width: 0,
             pixel_height: 0,
         };
-        if let Some(p) = self.mgr.process(idx) {
-            p.resize(size);
-        }
+        // Record the target size so a not-yet-spawned (restarting / dependency-
+        // delayed) process spawns at the current width, and resize it now if live.
+        self.mgr.set_size(idx, size);
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
@@ -108,14 +108,10 @@ impl App {
             }
             KeyCode::Char('r') if !ctrl => {
                 self.mgr.restart(self.selected);
-                self.resize_one(self.selected);
             }
             KeyCode::Char('k') if !ctrl => self.mgr.kill(self.selected),
             KeyCode::Char('r') if ctrl => {
                 self.mgr.restart_all();
-                for i in 0..self.mgr.count() {
-                    self.resize_one(i);
-                }
             }
             KeyCode::Char('k') if ctrl => self.mgr.kill_all(),
             KeyCode::Char('w') if !ctrl => self.toggle_wrap(),

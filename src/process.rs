@@ -407,7 +407,10 @@ struct ManagerInner {
     /// progress; UI renders this in the body area while Waiting / Blocked.
     diagnostics: Vec<StdMutex<VecDeque<String>>>,
     name_to_idx: HashMap<String, usize>,
-    size: StdMutex<PtySize>,
+    /// Target PTY size per slot, used when (re)spawning that slot. Kept in sync
+    /// with the live display by `App::resize_one` via `set_size`, so a restarted
+    /// or dependency-delayed process spawns at the current, wrap-aware width.
+    sizes: Vec<StdMutex<PtySize>>,
 }
 
 const DIAG_CAP: usize = 200;
@@ -427,13 +430,16 @@ impl ProcessManager {
         let diagnostics = (0..configs.len())
             .map(|_| StdMutex::new(VecDeque::new()))
             .collect();
+        let sizes = (0..configs.len())
+            .map(|_| StdMutex::new(size))
+            .collect();
         let inner = Arc::new(ManagerInner {
             configs,
             slots,
             watchers: StdMutex::new(watchers),
             diagnostics,
             name_to_idx,
-            size: StdMutex::new(size),
+            sizes,
         });
         let mgr = Self { inner };
         mgr.start_all();
@@ -517,12 +523,12 @@ impl ProcessManager {
         }
     }
 
-    pub fn resize_all(&self, size: PtySize) {
-        *self.inner.size.lock().unwrap() = size;
-        for i in 0..self.count() {
-            if let Slot::Process(p) = self.slot(i) {
-                p.resize(size);
-            }
+    /// Record the target PTY size for a slot (used at its next spawn) and, if a
+    /// process is currently live in that slot, resize it immediately.
+    pub fn set_size(&self, idx: usize, size: PtySize) {
+        *self.inner.sizes[idx].lock().unwrap() = size;
+        if let Slot::Process(p) = self.slot(idx) {
+            p.resize(size);
         }
     }
 
@@ -708,7 +714,7 @@ async fn watch_slot(
 
         // All deps cleared; spawn this process.
         push_diag(&inner, idx, "all dependencies ready; spawning");
-        let size = *inner.size.lock().unwrap();
+        let size = *inner.sizes[idx].lock().unwrap();
         match Process::spawn(&cfg, size) {
             Ok(p) => {
                 push_diag(&inner, idx, format!("spawned (pid {})", p.pid));
