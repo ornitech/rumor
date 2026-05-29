@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/ornitech/rumor/compare/v0.4.0...v0.5.0) (2026-05-29)
+
+
+### Features
+
+* **config:** add root-level envFiles shared by all processes ([#11](https://github.com/ornitech/rumor/issues/11)) ([3a65377](https://github.com/ornitech/rumor/commit/3a65377d01799b8ee19acf8d497573722a95e5a8))
+
+
+### Bug Fixes
+
+* **ui:** spawn restarted processes at the current terminal width ([#13](https://github.com/ornitech/rumor/issues/13)) ([7659cdb](https://github.com/ornitech/rumor/commit/7659cdb39c34fb0fe756fdcf50f95a79e25cc866))
+
 ## [0.4.0](https://github.com/ornitech/rumor/compare/v0.3.0...v0.4.0) (2026-05-27)
 
 
