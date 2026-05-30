@@ -66,7 +66,7 @@ Top level: `{ "envFiles": [ ... ], "processes": [ ... ] }`, where each entry of
 
 | Key | Value type | Ready when |
 | --- | --- | --- |
-| `port` | u16, or `"${VAR}"` string | A TCP connect to `127.0.0.1:port` succeeds. |
+| `port` | u16, or `"${VAR}"` string | A TCP connect to `127.0.0.1:port` or `[::1]:port` succeeds. |
 | `log` | string (regex) | The regex matches the dep's accumulated stdout/stderr. Supports `${VAR}` substitution. |
 | `exit` | i32, or `"${VAR}"` string | The dep process exits with this code (typically `0` for one-shot setup). |
 
@@ -138,7 +138,8 @@ Requires `docker`, `python3`, and free ports `5432` / `6379` / `3000` / `8080`. 
 
 ## Keys
 
-Two modes: **Nav** (default) and **Focus** (keystrokes go to the selected child).
+Three modes: **Nav** (default), **Focus** (keystrokes go to the selected child),
+and **Details** (a read-only metadata screen for the selected process).
 
 | Key | Action |
 | --- | --- |
@@ -146,12 +147,47 @@ Two modes: **Nav** (default) and **Focus** (keystrokes go to the selected child)
 | `Up` / `Down` / `PgUp` / `PgDn` / `Home` / `End` | Scroll the selected tab's scrollback |
 | `Enter` | Enter Focus mode (input forwarded to the child PTY) |
 | `Esc` | Leave Focus mode |
-| `r` | Restart the selected process |
-| `k` | Kill the selected process |
+| `r` | Restart the selected process. Sends `SIGTERM`, then `SIGKILL` after a 3s grace, and waits for the old process to fully exit before respawning (avoids port-in-use races). |
+| `k` | Kill the selected process. Sends `SIGTERM`, then `SIGKILL` after a 3s grace; does not respawn. |
 | `Ctrl+R` | Restart all |
 | `Ctrl+K` | Kill all |
 | `w` | Toggle line-wrap on the selected tab |
+| `d` | Open the process details screen (`Esc`/`d` to close; `↑/↓`, `PgUp/PgDn`, `Home` to scroll) |
 | `q` / `Ctrl+C` | Quit |
+
+## Status colors
+
+Each tab's dot and the status line are color-coded so you can read the whole stack at a glance:
+
+| Color | Meaning |
+| --- | --- |
+| 🟢 Green | Running |
+| 🟡 Yellow | Starting, or waiting for dependencies |
+| 🟣 Magenta | Blocked by an unmet dependency |
+| 🔴 Red | Exited with a non-zero code, or a `longLived` process that exited at all; also a hard spawn failure (e.g. command not found) |
+| ⚫ Gray | Signal-killed (e.g. via `k` / `Ctrl+K`) — a deliberate stop, not an error |
+
+A clean `exit 0` shows green only for short-lived processes (`longLived: false`); for a
+long-lived service any exit is treated as a crash and shown red.
+
+When a process isn't running, its tab body shows one of three states instead of terminal
+output: `waiting for dependencies`, `blocked: <reason>`, or `spawn failed: <error>`. The
+waiting and blocked tabs also print a live diagnostic log of the readiness checks, so you
+can see exactly which port/log/exit gate is still pending.
+
+## Process details (`d`)
+
+Press `d` on the selected tab to open a read-only details screen — the quickest way to
+confirm what a process was actually launched with. It shows:
+
+- **PID** and current **Status**
+- **Command**, **Args**, and **CWD**
+- **Long-lived** flag
+- **Env files** loaded for the process
+- **Depends on** — each dependency and its readiness condition
+- **Environment** — the fully resolved, post-merge environment the process received (or, if
+  it hasn't spawned yet, the config `env` overrides). This is the way to verify env-file
+  layering and `${VAR}` substitution actually produced what you expected.
 
 ## Logs
 
