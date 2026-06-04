@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/ornitech/rumor/compare/v0.5.0...v0.6.0) (2026-06-04)
+
+
+### Features
+
+* **ui:** show background shutdown progress on quit ([#15](https://github.com/ornitech/rumor/issues/15)) ([d832bb8](https://github.com/ornitech/rumor/commit/d832bb860429b24246428636a370c202209dc265))
+
 ## [0.5.0](https://github.com/ornitech/rumor/compare/v0.4.0...v0.5.0) (2026-05-29)
 
 
