@@ -532,13 +532,53 @@ impl ProcessManager {
         }
     }
 
-    pub async fn shutdown(&self, timeout: Duration) {
-        // Abort watchers first so they don't spawn fresh processes mid-shutdown.
+    /// Abort all in-flight dependency watchers so none of them respawn a
+    /// process while we're shutting down or restarting everything.
+    fn abort_watchers(&self) {
         for h in self.inner.watchers.lock().unwrap().iter_mut() {
             if let Some(h) = h.take() {
                 h.abort();
             }
         }
+    }
+
+    /// Begin a non-blocking shutdown: stop watchers (so nothing respawns), then
+    /// SIGTERM every running process with a scheduled SIGKILL fallback. Returns
+    /// immediately; callers poll `all_exited` to learn when it has finished.
+    pub fn begin_shutdown(&self) {
+        self.abort_watchers();
+        self.kill_all();
+    }
+
+    /// True when no slot holds a still-running process.
+    pub fn all_exited(&self) -> bool {
+        (0..self.count()).all(|i| match self.slot(i) {
+            Slot::Process(p) => !p.is_running(),
+            _ => true,
+        })
+    }
+
+    /// Non-blocking SIGKILL sweep over anything still alive. Used as the
+    /// force-quit backstop so we never orphan a child on immediate exit.
+    pub fn force_kill_all(&self) {
+        self.abort_watchers();
+        for i in 0..self.count() {
+            if let Slot::Process(p) = self.slot(i) {
+                if p.is_running() {
+                    unsafe { libc::kill(p.pid as i32, libc::SIGKILL) };
+                }
+            }
+        }
+    }
+
+    /// Blocking shutdown: SIGTERM all, await up to `timeout`, then SIGKILL
+    /// stragglers. The interactive TUI uses the non-blocking `begin_shutdown` +
+    /// `all_exited` poll instead; this remains as a synchronous teardown for the
+    /// integration tests (`tests/pty_smoke.rs`).
+    #[allow(dead_code)]
+    pub async fn shutdown(&self, timeout: Duration) {
+        // Abort watchers first so they don't spawn fresh processes mid-shutdown.
+        self.abort_watchers();
         for i in 0..self.count() {
             if let Slot::Process(p) = self.slot(i) {
                 if p.is_running() {

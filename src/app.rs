@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use portable_pty::PtySize;
 
@@ -8,6 +10,15 @@ use crate::process::ProcessManager;
 /// lines as a single row in the vt100 grid. The display widget clips the
 /// right side; toggle wrap back on (or shrink the line) to see it.
 const NOWRAP_COLS: u16 = 1000;
+
+/// Grace given to each process during shutdown before SIGKILL. Matches the
+/// grace baked into `Process::terminate` (via `kill_all`).
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
+
+/// Slack on top of `SHUTDOWN_GRACE` after which we stop rendering the shutdown
+/// screen and quit regardless - a safety net for a process that ignores even
+/// SIGKILL (e.g. stuck in uninterruptible sleep).
+const SHUTDOWN_DEADLINE_SLACK: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -21,6 +32,11 @@ pub struct App {
     pub selected: usize,
     pub mode: Mode,
     pub should_quit: bool,
+    /// Set once the user quits: the render loop keeps drawing a full-screen
+    /// shutdown progress view until every process has exited.
+    pub shutting_down: bool,
+    /// When the shutdown phase began, used for the spinner and hard deadline.
+    pub shutdown_started: Option<Instant>,
     pub wraps: Vec<bool>,
     pub display_rows: u16,
     pub display_cols: u16,
@@ -36,6 +52,8 @@ impl App {
             selected: 0,
             mode: Mode::Nav,
             should_quit: false,
+            shutting_down: false,
+            shutdown_started: None,
             wraps,
             display_rows,
             display_cols,
@@ -84,6 +102,16 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        if self.shutting_down {
+            // While shutting down, the only thing the user can do is force-quit.
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            if matches!(key.code, KeyCode::Char('q')) && !ctrl
+                || matches!(key.code, KeyCode::Char('c')) && ctrl
+            {
+                self.should_quit = true;
+            }
+            return;
+        }
         match self.mode {
             Mode::Nav => self.handle_nav_key(key),
             Mode::Focus => self.handle_focus_key(key),
@@ -91,11 +119,38 @@ impl App {
         }
     }
 
+    /// Enter the shutdown phase: stop watchers and SIGTERM everything, keeping
+    /// the TUI alive to show progress. If nothing is running, quit immediately.
+    fn begin_shutdown(&mut self) {
+        if self.mgr.all_exited() {
+            self.should_quit = true;
+            return;
+        }
+        self.shutting_down = true;
+        self.shutdown_started = Some(Instant::now());
+        self.mgr.begin_shutdown();
+    }
+
+    /// True once shutdown should end: every process exited, or the hard
+    /// deadline elapsed.
+    pub fn shutdown_complete(&self) -> bool {
+        if !self.shutting_down {
+            return false;
+        }
+        if self.mgr.all_exited() {
+            return true;
+        }
+        match self.shutdown_started {
+            Some(started) => started.elapsed() >= SHUTDOWN_GRACE + SHUTDOWN_DEADLINE_SLACK,
+            None => true,
+        }
+    }
+
     fn handle_nav_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Char('q') if !ctrl => self.should_quit = true,
-            KeyCode::Char('c') if ctrl => self.should_quit = true,
+            KeyCode::Char('q') if !ctrl => self.begin_shutdown(),
+            KeyCode::Char('c') if ctrl => self.begin_shutdown(),
             KeyCode::Left => self.prev_tab(),
             KeyCode::Right => self.next_tab(),
             KeyCode::Up => self.scroll_by(1),

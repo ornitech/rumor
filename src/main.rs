@@ -159,12 +159,15 @@ async fn run(processes: Vec<crate::config::ProcessConfig>) -> Result<()> {
             _ = tick.tick() => {}
         }
 
-        if app.should_quit {
+        // Force-quit (second `q`) or the shutdown phase finished.
+        if app.should_quit || app.shutdown_complete() {
             break;
         }
     }
 
-    app.mgr.shutdown(Duration::from_secs(3)).await;
+    // Backstop: SIGKILL anything still alive (e.g. force-quit before the grace
+    // elapsed) so we never orphan a child. No-op on a clean shutdown.
+    app.mgr.force_kill_all();
 
     Ok(())
 }
