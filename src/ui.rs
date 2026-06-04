@@ -12,6 +12,11 @@ use crate::status_color::exited_color;
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
+    if app.shutting_down {
+        draw_shutdown(frame, app, area);
+        return;
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -399,6 +404,80 @@ fn draw_details_body(frame: &mut Frame, app: &App, area: Rect) {
     let paragraph = Paragraph::new(lines)
         .block(block)
         .scroll((app.details_scroll, 0));
+    frame.render_widget(paragraph, area);
+}
+
+const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];
+
+/// Full-screen view shown while the orchestrator is shutting down: one line per
+/// process with its live state, so the user can see that long-lived processes
+/// are still being terminated in the background.
+fn draw_shutdown(frame: &mut Frame, app: &App, area: Rect) {
+    let count = app.mgr.count();
+    let frame_idx = app
+        .shutdown_started
+        .map(|t| (t.elapsed().as_millis() / 100) as usize % SPINNER.len())
+        .unwrap_or(0);
+    let spinner = SPINNER[frame_idx];
+
+    let mut stopped = 0usize;
+    let mut rows: Vec<Line> = Vec::new();
+    for i in 0..count {
+        let name = app.mgr.configs()[i].name.clone();
+        let (state_span, is_stopped) = match app.mgr.slot(i) {
+            Slot::Process(p) => match p.status() {
+                Status::Starting | Status::Running => (
+                    Span::styled(
+                        format!("{spinner} terminating..."),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                    false,
+                ),
+                Status::Exited(info) => {
+                    let color = exited_color(info.code, info.signal.is_some(), p.long_lived);
+                    (
+                        Span::styled(format!("stopped ({info})"), Style::default().fg(color)),
+                        true,
+                    )
+                }
+                Status::SpawnFailed(err) => (
+                    Span::styled(
+                        format!("spawn failed: {err}"),
+                        Style::default().fg(Color::Magenta),
+                    ),
+                    true,
+                ),
+            },
+            _ => (
+                Span::styled("not running", Style::default().fg(Color::DarkGray)),
+                true,
+            ),
+        };
+        if is_stopped {
+            stopped += 1;
+        }
+        rows.push(Line::from(vec![
+            Span::styled(
+                format!("  {name:<20} "),
+                Style::default().fg(Color::White),
+            ),
+            state_span,
+        ]));
+    }
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled(
+        format!("  Stopped {stopped}/{count} processes"),
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::raw(""));
+    lines.extend(rows);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Shutting down (press q to force quit) ");
+    let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
 
