@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/ornitech/rumor/compare/v0.6.0...v0.7.0) (2026-06-05)
+
+
+### Features
+
+* **config:** default to ./rumor.json when no path is given ([#17](https://github.com/ornitech/rumor/issues/17)) ([177f22f](https://github.com/ornitech/rumor/commit/177f22fb2add4577eeac70dde1849ffa9b277dbc))
+
 ## [0.6.0](https://github.com/ornitech/rumor/compare/v0.5.0...v0.6.0) (2026-06-04)
 
 
