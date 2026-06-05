@@ -14,8 +14,11 @@ brew install rumor
 ## Usage
 
 ```bash
-rumor <config.json>
+rumor [config.json]
 ```
+
+The config path is optional: with no argument, rumor loads `./rumor.json` from
+the current directory. Pass an explicit path to use any other config file.
 
 A minimal config:
 
