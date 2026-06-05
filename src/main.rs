@@ -8,7 +8,7 @@ mod template;
 mod ui;
 
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -74,18 +74,34 @@ fn restore_terminal() {
     let _ = stdout.flush();
 }
 
+const DEFAULT_CONFIG: &str = "rumor.json";
+
+/// Resolve which config file to load from the CLI args.
+/// Returns `None` when usage is invalid (caller prints usage + exits 2).
+fn resolve_config_path(args: &[String]) -> Option<PathBuf> {
+    match args.len() {
+        2 => Some(PathBuf::from(&args[1])),
+        1 if Path::new(DEFAULT_CONFIG).exists() => Some(PathBuf::from(DEFAULT_CONFIG)),
+        _ => None,
+    }
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 2 {
-        eprintln!("usage: rumor <config.json>");
-        eprintln!();
-        eprintln!("Logs are written to {}/rumor/rumor.log",
-            dirs_data_local().map(|p| p.display().to_string()).unwrap_or_else(|| "<tmp>".into()));
-        eprintln!("Set RUMOR_LOG=debug to trace dependency readiness checks.");
-        std::process::exit(2);
-    }
-    let config_path = PathBuf::from(&args[1]);
+    let config_path = match resolve_config_path(&args) {
+        Some(p) => p,
+        None => {
+            eprintln!("usage: rumor [config.json]");
+            eprintln!();
+            eprintln!("With no argument, rumor loads ./rumor.json from the current directory.");
+            eprintln!();
+            eprintln!("Logs are written to {}/rumor/rumor.log",
+                dirs_data_local().map(|p| p.display().to_string()).unwrap_or_else(|| "<tmp>".into()));
+            eprintln!("Set RUMOR_LOG=debug to trace dependency readiness checks.");
+            std::process::exit(2);
+        }
+    };
 
     init_tracing();
     let loaded = Config::load(&config_path).context("loading config")?;
@@ -170,4 +186,50 @@ async fn run(processes: Vec<crate::config::ProcessConfig>) -> Result<()> {
     app.mgr.force_kill_all();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn explicit_path_is_used_verbatim() {
+        assert_eq!(
+            resolve_config_path(&args(&["rumor", "custom.json"])),
+            Some(PathBuf::from("custom.json"))
+        );
+    }
+
+    #[test]
+    fn too_many_args_is_invalid() {
+        assert_eq!(resolve_config_path(&args(&["rumor", "a", "b"])), None);
+    }
+
+    // Both bare-invocation cases depend on the process-global cwd, so they live
+    // in one test to avoid a data race between parallel test threads.
+    #[test]
+    fn bare_invocation_uses_rumor_json_only_when_present() {
+        let dir = std::env::temp_dir().join(format!("rumor-cfg-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        // No rumor.json present -> invalid usage.
+        let without = resolve_config_path(&args(&["rumor"]));
+
+        // rumor.json present -> defaults to it.
+        std::fs::write(dir.join(DEFAULT_CONFIG), "{}").unwrap();
+        let with = resolve_config_path(&args(&["rumor"]));
+
+        std::env::set_current_dir(&prev).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(without, None);
+        assert_eq!(with, Some(PathBuf::from(DEFAULT_CONFIG)));
+    }
 }
