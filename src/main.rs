@@ -76,25 +76,64 @@ fn restore_terminal() {
 
 const DEFAULT_CONFIG: &str = "rumor.json";
 
-/// Resolve which config file to load from the CLI args.
+/// Parse the CLI args into a config path and the requested tags.
 /// Returns `None` when usage is invalid (caller prints usage + exits 2).
-fn resolve_config_path(args: &[String]) -> Option<PathBuf> {
-    match args.len() {
-        2 => Some(PathBuf::from(&args[1])),
-        1 if Path::new(DEFAULT_CONFIG).exists() => Some(PathBuf::from(DEFAULT_CONFIG)),
-        _ => None,
+///
+/// Grammar: `rumor [config.json] [-t|--tags TAG[,TAG...] ...]`. The `-t` flag
+/// greedily consumes following non-flag tokens (each split on commas), so
+/// `-t backend api`, `-t backend,api`, and repeated `-t backend -t api` all
+/// work. A positional config path must appear before the first `-t`.
+fn parse_args(args: &[String]) -> Option<(PathBuf, Vec<String>)> {
+    let mut config_path: Option<PathBuf> = None;
+    let mut tags: Vec<String> = Vec::new();
+
+    let mut i = 1;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "-t" || arg == "--tags" {
+            let mut collected = 0;
+            i += 1;
+            while i < args.len() && !args[i].starts_with('-') {
+                for t in args[i].split(',') {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        tags.push(t.to_string());
+                        collected += 1;
+                    }
+                }
+                i += 1;
+            }
+            if collected == 0 {
+                return None;
+            }
+        } else if arg.starts_with('-') {
+            return None;
+        } else if config_path.is_none() {
+            config_path = Some(PathBuf::from(arg));
+            i += 1;
+        } else {
+            return None;
+        }
     }
+
+    let config_path = match config_path {
+        Some(p) => p,
+        None if Path::new(DEFAULT_CONFIG).exists() => PathBuf::from(DEFAULT_CONFIG),
+        None => return None,
+    };
+    Some((config_path, tags))
 }
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let config_path = match resolve_config_path(&args) {
+    let (config_path, tags) = match parse_args(&args) {
         Some(p) => p,
         None => {
-            eprintln!("usage: rumor [config.json]");
+            eprintln!("usage: rumor [config.json] [-t|--tags TAG ...]");
             eprintln!();
-            eprintln!("With no argument, rumor loads ./rumor.json from the current directory.");
+            eprintln!("With no config argument, rumor loads ./rumor.json from the current directory.");
+            eprintln!("--tags runs only processes carrying any of the given tags, plus their dependencies.");
             eprintln!();
             eprintln!("Logs are written to {}/rumor/rumor.log",
                 dirs_data_local().map(|p| p.display().to_string()).unwrap_or_else(|| "<tmp>".into()));
@@ -105,6 +144,13 @@ async fn main() -> Result<()> {
 
     init_tracing();
     let loaded = Config::load(&config_path).context("loading config")?;
+
+    let processes = if tags.is_empty() {
+        loaded.config.processes
+    } else {
+        config::filter_by_tags(&loaded.config.processes, &tags)
+            .context("filtering processes by tags")?
+    };
 
     // Install a panic hook so a panic during the TUI loop doesn't leave the
     // terminal in raw / alternate-screen mode.
@@ -120,7 +166,7 @@ async fn main() -> Result<()> {
         execute!(stdout, EnterAlternateScreen).context("entering alt screen")?;
     }
 
-    let result = run(loaded.config.processes).await;
+    let result = run(processes).await;
 
     restore_terminal();
 
@@ -199,14 +245,57 @@ mod tests {
     #[test]
     fn explicit_path_is_used_verbatim() {
         assert_eq!(
-            resolve_config_path(&args(&["rumor", "custom.json"])),
-            Some(PathBuf::from("custom.json"))
+            parse_args(&args(&["rumor", "custom.json"])),
+            Some((PathBuf::from("custom.json"), vec![]))
         );
     }
 
     #[test]
-    fn too_many_args_is_invalid() {
-        assert_eq!(resolve_config_path(&args(&["rumor", "a", "b"])), None);
+    fn two_positional_args_is_invalid() {
+        assert_eq!(parse_args(&args(&["rumor", "a", "b"])), None);
+    }
+
+    #[test]
+    fn tags_collect_space_separated() {
+        assert_eq!(
+            parse_args(&args(&["rumor", "c.json", "-t", "backend", "api"])),
+            Some((
+                PathBuf::from("c.json"),
+                vec!["backend".to_string(), "api".to_string()]
+            ))
+        );
+    }
+
+    #[test]
+    fn tags_split_on_commas() {
+        assert_eq!(
+            parse_args(&args(&["rumor", "c.json", "--tags", "backend,api"])),
+            Some((
+                PathBuf::from("c.json"),
+                vec!["backend".to_string(), "api".to_string()]
+            ))
+        );
+    }
+
+    #[test]
+    fn repeated_tag_flag_accumulates() {
+        assert_eq!(
+            parse_args(&args(&["rumor", "c.json", "-t", "backend", "-t", "api"])),
+            Some((
+                PathBuf::from("c.json"),
+                vec!["backend".to_string(), "api".to_string()]
+            ))
+        );
+    }
+
+    #[test]
+    fn tag_flag_without_value_is_invalid() {
+        assert_eq!(parse_args(&args(&["rumor", "c.json", "-t"])), None);
+    }
+
+    #[test]
+    fn unknown_flag_is_invalid() {
+        assert_eq!(parse_args(&args(&["rumor", "c.json", "-x"])), None);
     }
 
     // Both bare-invocation cases depend on the process-global cwd, so they live
@@ -220,16 +309,16 @@ mod tests {
         std::env::set_current_dir(&dir).unwrap();
 
         // No rumor.json present -> invalid usage.
-        let without = resolve_config_path(&args(&["rumor"]));
+        let without = parse_args(&args(&["rumor"]));
 
         // rumor.json present -> defaults to it.
         std::fs::write(dir.join(DEFAULT_CONFIG), "{}").unwrap();
-        let with = resolve_config_path(&args(&["rumor"]));
+        let with = parse_args(&args(&["rumor"]));
 
         std::env::set_current_dir(&prev).unwrap();
         std::fs::remove_dir_all(&dir).ok();
 
         assert_eq!(without, None);
-        assert_eq!(with, Some(PathBuf::from(DEFAULT_CONFIG)));
+        assert_eq!(with, Some((PathBuf::from(DEFAULT_CONFIG), vec![])));
     }
 }

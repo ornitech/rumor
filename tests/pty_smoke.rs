@@ -74,6 +74,7 @@ async fn process_runs_under_pty_and_emits_output() {
         env: HashMap::new(),
         depends_on: vec![],
         long_lived: true,
+        tags: vec![],
     };
 
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
@@ -122,6 +123,7 @@ async fn resize_replays_history_at_new_width() {
         env: HashMap::new(),
         depends_on: vec![],
         long_lived: true,
+        tags: vec![],
     };
 
     let narrow = PtySize { rows: 10, cols: 40, pixel_width: 0, pixel_height: 0 };
@@ -183,6 +185,7 @@ async fn dep_with_exit_condition_gates_dependent_spawn() {
         env: HashMap::new(),
         depends_on: vec![],
         long_lived: false,
+        tags: vec![],
     };
     // api: depends on migrate exit 0; just echo and exit
     let api = ProcessConfig {
@@ -198,6 +201,7 @@ async fn dep_with_exit_condition_gates_dependent_spawn() {
             until: ReadinessCondition::Exit(0),
         }],
         long_lived: true,
+        tags: vec![],
     };
 
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
@@ -252,6 +256,7 @@ async fn dep_with_log_condition_unblocks_dependent() {
         env: HashMap::new(),
         depends_on: vec![],
         long_lived: true,
+        tags: vec![],
     };
     let client = ProcessConfig {
         name: "client".into(),
@@ -266,6 +271,7 @@ async fn dep_with_log_condition_unblocks_dependent() {
             until: ReadinessCondition::Log(r"Listening on port \d+".into()),
         }],
         long_lived: true,
+        tags: vec![],
     };
 
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
@@ -305,6 +311,7 @@ async fn manager_kills_long_running_process_on_shutdown() {
         env: HashMap::new(),
         depends_on: vec![],
         long_lived: true,
+        tags: vec![],
     };
 
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };

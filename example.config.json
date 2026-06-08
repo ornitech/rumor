@@ -7,7 +7,8 @@
         "-c",
         "i=0; while true; do printf '\\033[36mcounter %d\\033[0m  GREETING=%s\\n' \"$i\" \"$GREETING\"; i=$((i+1)); sleep 1; done"
       ],
-      "cwd": "./demo/counter"
+      "cwd": "./demo/counter",
+      "tags": ["backend"]
     },
     {
       "name": "ticker",
@@ -16,7 +17,8 @@
         "-c",
         "while true; do printf '\\033[33mtick \\033[1;33m%s\\033[0m\\n' \"$(date +%T)\"; sleep \"${RATE:-1}\"; done"
       ],
-      "cwd": "./demo/ticker"
+      "cwd": "./demo/ticker",
+      "tags": ["backend"]
     },
     {
       "name": "repl",
@@ -25,7 +27,8 @@
       "cwd": "./demo/repl",
       "env": {
         "PS1": "py> "
-      }
+      },
+      "tags": ["frontend"]
     },
     {
       "name": "migration",
