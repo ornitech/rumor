@@ -40,6 +40,9 @@ pub struct ProcessConfig {
     /// True for services that should run forever (default). False for one-shot
     /// scripts where a clean `exit 0` is success, not a crash.
     pub long_lived: bool,
+    /// Free-form labels used to select a subset of processes via `--tags`.
+    /// Trimmed; empty entries are dropped at load time.
+    pub tags: Vec<String>,
 }
 
 fn default_long_lived() -> bool {
@@ -95,6 +98,8 @@ struct RawProcessConfig {
     depends_on: Vec<RawDependency>,
     #[serde(default = "default_long_lived", rename = "longLived")]
     long_lived: bool,
+    #[serde(default)]
+    tags: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,6 +146,7 @@ impl Config {
                 env,
                 depends_on,
                 long_lived,
+                tags,
             } = raw_proc;
 
             if name.trim().is_empty() {
@@ -264,6 +270,11 @@ impl Config {
                 env,
                 depends_on: deps,
                 long_lived,
+                tags: tags
+                    .into_iter()
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect(),
             });
         }
 
@@ -366,4 +377,110 @@ fn validate_dep_graph(processes: &[ProcessConfig]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Select the subset of `processes` whose tags intersect `tags` (OR match),
+/// then transitively pull in every `dependsOn` target so selected processes
+/// never wait forever on an unselected dependency. The returned vector keeps
+/// the original config order. Errors if no process matches any requested tag.
+pub fn filter_by_tags(processes: &[ProcessConfig], tags: &[String]) -> Result<Vec<ProcessConfig>> {
+    let name_to_idx: HashMap<&str, usize> = processes
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.name.as_str(), i))
+        .collect();
+
+    let want: HashSet<&str> = tags.iter().map(|s| s.as_str()).collect();
+
+    let mut included: HashSet<usize> = processes
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.tags.iter().any(|t| want.contains(t.as_str())))
+        .map(|(i, _)| i)
+        .collect();
+
+    if included.is_empty() {
+        return Err(anyhow!("no processes match tag(s): {}", tags.join(", ")));
+    }
+
+    // Transitively add dependencies of every included process.
+    let mut stack: Vec<usize> = included.iter().copied().collect();
+    while let Some(i) = stack.pop() {
+        for dep in &processes[i].depends_on {
+            if let Some(&j) = name_to_idx.get(dep.name.as_str()) {
+                if included.insert(j) {
+                    stack.push(j);
+                }
+            }
+        }
+    }
+
+    Ok(processes
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| included.contains(i))
+        .map(|(_, p)| p.clone())
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proc(name: &str, tags: &[&str], deps: &[&str]) -> ProcessConfig {
+        ProcessConfig {
+            name: name.to_string(),
+            command: "true".to_string(),
+            args: vec![],
+            cwd: PathBuf::from("."),
+            env_files: vec![],
+            global_env_files: vec![],
+            env: HashMap::new(),
+            depends_on: deps
+                .iter()
+                .map(|d| Dependency {
+                    name: d.to_string(),
+                    until: ReadinessCondition::Exit(0),
+                })
+                .collect(),
+            long_lived: true,
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+        }
+    }
+
+    fn names(procs: &[ProcessConfig]) -> Vec<&str> {
+        procs.iter().map(|p| p.name.as_str()).collect()
+    }
+
+    #[test]
+    fn matches_any_tag_or_semantics() {
+        let procs = vec![
+            proc("a", &["backend"], &[]),
+            proc("b", &["frontend"], &[]),
+            proc("c", &["api", "backend"], &[]),
+        ];
+        let out = filter_by_tags(&procs, &["backend".to_string()]).unwrap();
+        assert_eq!(names(&out), vec!["a", "c"]);
+    }
+
+    #[test]
+    fn pulls_in_transitive_dependencies() {
+        // api -> db -> volume; only api is tagged.
+        let procs = vec![
+            proc("volume", &[], &[]),
+            proc("db", &[], &["volume"]),
+            proc("api", &["backend"], &["db"]),
+            proc("frontend", &["frontend"], &[]),
+        ];
+        let out = filter_by_tags(&procs, &["backend".to_string()]).unwrap();
+        // Original order preserved; frontend excluded.
+        assert_eq!(names(&out), vec!["volume", "db", "api"]);
+    }
+
+    #[test]
+    fn empty_match_is_an_error() {
+        let procs = vec![proc("a", &["backend"], &[])];
+        let err = filter_by_tags(&procs, &["nope".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("no processes match tag(s): nope"));
+    }
 }

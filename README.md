@@ -14,11 +14,29 @@ brew install rumor
 ## Usage
 
 ```bash
-rumor [config.json]
+rumor [config.json] [-t|--tags TAG ...]
 ```
 
 The config path is optional: with no argument, rumor loads `./rumor.json` from
 the current directory. Pass an explicit path to use any other config file.
+
+### Running a subset with tags
+
+Give processes `tags` in the config, then pass `-t`/`--tags` to run only the
+matching ones:
+
+```bash
+rumor -t backend          # run every process tagged "backend"
+rumor -t backend api      # run processes tagged "backend" OR "api"
+rumor -t backend,api      # same, comma-separated
+rumor config.json -t backend
+```
+
+A process is selected if it carries **any** of the requested tags. Dependencies
+of selected processes are pulled in automatically (transitively), so a tagged
+service never hangs waiting on an untagged `dependsOn` target. If no process
+matches, rumor exits with an error. A positional config path must come before
+the first `-t`.
 
 A minimal config:
 
@@ -57,6 +75,7 @@ Top level: `{ "envFiles": [ ... ], "processes": [ ... ] }`, where each entry of
 | `envFiles` | string[] | `[]` | Extra `.env` files loaded in order *after* `<cwd>/.env`; later files override earlier ones. Relative paths resolve against the config file's directory. |
 | `dependsOn` | dependency[] | `[]` | Readiness gates that must pass before this process starts. |
 | `longLived` | bool | `true` | If `false`, a clean `exit 0` is shown as success (green) instead of a crash (red). Use for migrations and one-shot setup scripts. |
+| `tags` | string[] | `[]` | Labels for selecting a subset of processes with `-t`/`--tags`. Empty/whitespace entries are ignored. |
 
 ### Dependency object (`dependsOn[]`)
 

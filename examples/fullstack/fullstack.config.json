@@ -33,6 +33,7 @@
       "args": ["server.py"],
       "cwd": "./api",
       "envFiles": ["./api/.env.local"],
+      "tags": ["backend"],
       "dependsOn": [
         { "name": "db",    "until": { "port": "${POSTGRES_PORT}" } },
         { "name": "redis", "until": { "port": "${REDIS_PORT}" } }
@@ -47,6 +48,7 @@
       "env": {
         "LOG_LEVEL": "warn"
       },
+      "tags": ["frontend"],
       "dependsOn": [
         { "name": "api", "until": { "port": "${API_PORT}" } }
       ]
