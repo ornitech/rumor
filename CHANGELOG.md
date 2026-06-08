@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/ornitech/rumor/compare/v0.7.0...v0.8.0) (2026-06-08)
+
+
+### Features
+
+* **config:** run a subset of processes with -t/--tags ([#19](https://github.com/ornitech/rumor/issues/19)) ([3b68169](https://github.com/ornitech/rumor/commit/3b68169b7786b01439f1b9f0dbe702b06a846b10))
+
 ## [0.7.0](https://github.com/ornitech/rumor/compare/v0.6.0...v0.7.0) (2026-06-05)
 
 
