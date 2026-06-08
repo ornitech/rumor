@@ -33,10 +33,19 @@ const UI_CHROME_ROWS: u16 = 6;
 // Body block left+right borders = 2 cols.
 const UI_CHROME_COLS: u16 = 2;
 
+// vt100 0.16 underflows on a 1-row or 1-col screen the moment output wraps or
+// scrolls (`size.cols - width` and `prev_pos.row -= scrolled` in grid.rs), which
+// panics the process reader thread and poisons its parser lock. body_inner_size
+// is the sole source of every PTY/parser dimension (initial spawn and resize),
+// so clamp it to a size vt100 can actually handle, even when the real terminal
+// is degenerate (0/1 rows) or headless. 2x2 is the smallest panic-free size.
+const MIN_PTY_ROWS: u16 = 2;
+const MIN_PTY_COLS: u16 = 2;
+
 fn body_inner_size(width: u16, height: u16) -> (u16, u16) {
     (
-        height.saturating_sub(UI_CHROME_ROWS).max(1),
-        width.saturating_sub(UI_CHROME_COLS).max(1),
+        height.saturating_sub(UI_CHROME_ROWS).max(MIN_PTY_ROWS),
+        width.saturating_sub(UI_CHROME_COLS).max(MIN_PTY_COLS),
     )
 }
 
@@ -240,6 +249,18 @@ mod tests {
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    // vt100 panics on a 1-row/1-col parser when output wraps or scrolls, so the
+    // PTY size derived from the terminal must never drop below 2x2 — including
+    // for a degenerate (0x0 / 1x1) or headless terminal.
+    #[test]
+    fn body_inner_size_stays_above_vt100_minimum() {
+        for (w, h) in [(0u16, 0u16), (1, 1), (2, 6), (7, 7), (8, 7), (200, 50)] {
+            let (rows, cols) = body_inner_size(w, h);
+            assert!(rows >= MIN_PTY_ROWS, "rows {rows} < {MIN_PTY_ROWS} for {w}x{h}");
+            assert!(cols >= MIN_PTY_COLS, "cols {cols} < {MIN_PTY_COLS} for {w}x{h}");
+        }
     }
 
     #[test]
