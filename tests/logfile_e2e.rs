@@ -16,6 +16,8 @@ mod env;
 mod logfile;
 #[path = "../src/template.rs"]
 mod template;
+#[path = "../src/ports.rs"]
+mod ports;
 #[path = "../src/process.rs"]
 mod process;
 
@@ -44,6 +46,7 @@ fn cfg(name: &str, script: &str, cwd: PathBuf) -> ProcessConfig {
         env_files: vec![],
         global_env_files: vec![],
         env: HashMap::new(),
+        dynamic_ports: HashMap::new(),
         depends_on: vec![],
         long_lived: true,
         tags: vec![],

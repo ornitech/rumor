@@ -7,6 +7,8 @@ mod config;
 mod env;
 #[path = "../src/template.rs"]
 mod template;
+#[path = "../src/ports.rs"]
+mod ports;
 
 use config::{Config, ReadinessCondition};
 
@@ -45,7 +47,13 @@ fn fullstack_build_env_succeeds_for_every_service() {
     let path = workspace_root().join("examples/fullstack/fullstack.config.json");
     let loaded = Config::load(&path).expect("fullstack config parses");
     for proc in &loaded.config.processes {
-        let result = env::build_env(&proc.cwd, &proc.global_env_files, &proc.env_files, &proc.env);
+        let result = env::build_env(
+            &proc.cwd,
+            &proc.global_env_files,
+            &proc.env_files,
+            &proc.env,
+            &proc.dynamic_ports,
+        );
         if let Err(e) = &result {
             panic!("build_env failed for {}: {e:#}", proc.name);
         }
@@ -125,7 +133,7 @@ fn dotenv_is_loaded_from_cwd() {
     let mut overrides = HashMap::new();
     overrides.insert("BOTH".to_string(), "explicit".to_string());
 
-    let merged = env::build_env(&dir, &[], &[], &overrides).unwrap();
+    let merged = env::build_env(&dir, &[], &[], &overrides, &HashMap::new()).unwrap();
     assert_eq!(merged.get("FROM_DOTENV").map(String::as_str), Some("42"));
     // JSON env block beats .env.
     assert_eq!(merged.get("BOTH").map(String::as_str), Some("explicit"));
@@ -138,7 +146,7 @@ fn dotenv_is_loaded_from_cwd() {
 #[test]
 fn no_dotenv_is_fine() {
     let dir = tempdir();
-    let merged = env::build_env(&dir, &[], &[], &HashMap::new()).unwrap();
+    let merged = env::build_env(&dir, &[], &[], &HashMap::new(), &HashMap::new()).unwrap();
     assert!(!merged.contains_key("FROM_DOTENV"));
 }
 
@@ -151,7 +159,7 @@ fn env_files_load_in_order_and_override_dotenv() {
     std::fs::write(&f1, "A=first\nB=first\n").unwrap();
     std::fs::write(&f2, "B=second\nC=second\n").unwrap();
 
-    let merged = env::build_env(&dir, &[], &[f1, f2], &HashMap::new()).unwrap();
+    let merged = env::build_env(&dir, &[], &[f1, f2], &HashMap::new(), &HashMap::new()).unwrap();
     // .env-only key survives.
     assert_eq!(merged.get("L").map(String::as_str), Some("dotenv"));
     // first.env overrides .env.
@@ -170,7 +178,7 @@ fn json_env_beats_env_files() {
     let mut explicit = HashMap::new();
     explicit.insert("K".to_string(), "from-json".to_string());
 
-    let merged = env::build_env(&dir, &[], &[f], &explicit).unwrap();
+    let merged = env::build_env(&dir, &[], &[f], &explicit, &HashMap::new()).unwrap();
     assert_eq!(merged.get("K").map(String::as_str), Some("from-json"));
 }
 
@@ -331,19 +339,19 @@ fn global_env_files_are_lowest_config_precedence() {
     let globals = vec![g];
 
     // global < dotenv: dotenv wins.
-    let m = env::build_env(&dir, &globals, &[], &HashMap::new()).unwrap();
+    let m = env::build_env(&dir, &globals, &[], &HashMap::new(), &HashMap::new()).unwrap();
     assert_eq!(m.get("K").map(String::as_str), Some("dotenv"));
     assert_eq!(m.get("GLOBAL_ONLY").map(String::as_str), Some("yes"));
 
     // global < per-process envFiles.
     let no_dotenv = tempdir();
-    let m = env::build_env(&no_dotenv, &globals, &[f], &HashMap::new()).unwrap();
+    let m = env::build_env(&no_dotenv, &globals, &[f], &HashMap::new(), &HashMap::new()).unwrap();
     assert_eq!(m.get("K").map(String::as_str), Some("procfile"));
 
     // global < json env block.
     let mut json = HashMap::new();
     json.insert("K".to_string(), "json".to_string());
-    let m = env::build_env(&no_dotenv, &globals, &[], &json).unwrap();
+    let m = env::build_env(&no_dotenv, &globals, &[], &json, &HashMap::new()).unwrap();
     assert_eq!(m.get("K").map(String::as_str), Some("json"));
 }
 
@@ -354,7 +362,7 @@ fn global_env_files_load_in_order() {
     let g2 = dir.join("g2.env");
     std::fs::write(&g1, "A=one\nB=one\n").unwrap();
     std::fs::write(&g2, "B=two\n").unwrap();
-    let m = env::build_env(&dir, &[g1, g2], &[], &HashMap::new()).unwrap();
+    let m = env::build_env(&dir, &[g1, g2], &[], &HashMap::new(), &HashMap::new()).unwrap();
     assert_eq!(m.get("A").map(String::as_str), Some("one"));
     assert_eq!(m.get("B").map(String::as_str), Some("two"));
 }
@@ -385,9 +393,14 @@ fn root_env_files_apply_to_every_process() {
 
     for proc in &loaded.config.processes {
         assert_eq!(proc.global_env_files.len(), 1, "{} global_env_files", proc.name);
-        let merged =
-            env::build_env(&proc.cwd, &proc.global_env_files, &proc.env_files, &proc.env)
-                .unwrap();
+        let merged = env::build_env(
+            &proc.cwd,
+            &proc.global_env_files,
+            &proc.env_files,
+            &proc.env,
+            &proc.dynamic_ports,
+        )
+        .unwrap();
         assert_eq!(
             merged.get("SHARED").map(String::as_str),
             Some("global"),
@@ -729,6 +742,137 @@ fn unterminated_template_errors() {
     std::fs::write(&cfg, body).unwrap();
     let err = Config::load(&cfg).unwrap_err().to_string();
     assert!(err.contains("unterminated"), "got: {err}");
+}
+
+// ---------------------------------------------------------------------------
+// dynamicPorts
+// ---------------------------------------------------------------------------
+
+#[test]
+fn dynamic_port_flows_into_args_deps_and_env_with_highest_precedence() {
+    let dir = tempdir();
+    // Competing values that the dynamic allocation must beat.
+    std::fs::write(dir.join(".env"), "API_PORT=9999\n").unwrap();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{
+            "dynamicPorts": ["API_PORT"],
+            "processes": [
+                {{ "name": "db", "command": "echo", "cwd": "{0}" }},
+                {{ "name": "api", "command": "echo", "cwd": "{0}",
+                   "args": ["${{API_PORT}}"],
+                   "env": {{ "API_PORT": "1111" }},
+                   "dependsOn": [{{"name": "db", "until": {{"port": "${{API_PORT}}"}}}}] }}
+            ]
+        }}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let loaded = Config::load(&cfg).expect("should load");
+
+    // The allocated port was persisted next to the config.
+    let store: HashMap<String, u16> = serde_json::from_slice(
+        &std::fs::read(dir.join(".rumor-ports.json")).expect("store file written"),
+    )
+    .expect("store is valid json");
+    let port = store["API_PORT"];
+    let port_str = port.to_string();
+
+    // Dynamic beats both the .env file and the JSON env block.
+    assert_ne!(port_str, "1111");
+    assert_ne!(port_str, "9999");
+
+    // ${API_PORT} substitution in args and until.port saw the allocated value.
+    let api = &loaded.config.processes[1];
+    assert_eq!(api.args, vec![port_str.clone()]);
+    assert_eq!(port_of(&loaded, 1, 0), port);
+    assert_eq!(loaded.dynamic_ports.get("API_PORT"), Some(&port_str));
+
+    // Spawn-time env (same build_env call as Process::spawn) sees it too.
+    let merged = env::build_env(
+        &api.cwd,
+        &api.global_env_files,
+        &api.env_files,
+        &api.env,
+        &api.dynamic_ports,
+    )
+    .unwrap();
+    assert_eq!(merged.get("API_PORT"), Some(&port_str));
+}
+
+#[test]
+fn dynamic_ports_are_stable_across_loads() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{
+            "dynamicPorts": ["A_PORT", "B_PORT"],
+            "processes": [
+                {{ "name": "a", "command": "echo", "cwd": "{0}", "args": ["${{A_PORT}}", "${{B_PORT}}"] }}
+            ]
+        }}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let first = Config::load(&cfg).expect("should load");
+    let second = Config::load(&cfg).expect("should load again");
+    assert_eq!(first.dynamic_ports, second.dynamic_ports);
+    assert_eq!(
+        first.config.processes[0].args,
+        second.config.processes[0].args
+    );
+}
+
+#[test]
+fn config_rejects_bad_dynamic_port_name() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{
+            "dynamicPorts": ["1BAD"],
+            "processes": [
+                {{ "name": "a", "command": "echo", "cwd": "{0}" }}
+            ]
+        }}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let err = format!("{:#}", Config::load(&cfg).unwrap_err());
+    assert!(err.contains("dynamicPorts"), "got: {err}");
+    assert!(err.contains("1BAD"), "got: {err}");
+}
+
+#[test]
+fn config_rejects_duplicate_dynamic_port() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{
+            "dynamicPorts": ["API_PORT", "API_PORT"],
+            "processes": [
+                {{ "name": "a", "command": "echo", "cwd": "{0}" }}
+            ]
+        }}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    let err = format!("{:#}", Config::load(&cfg).unwrap_err());
+    assert!(err.contains("duplicate entry: API_PORT"), "got: {err}");
+}
+
+#[test]
+fn no_dynamic_ports_leaves_no_store_file() {
+    let dir = tempdir();
+    let cfg = dir.join("c.json");
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "a", "command": "echo", "cwd": "{0}" }}
+        ]}}"#,
+        dir.display()
+    );
+    std::fs::write(&cfg, body).unwrap();
+    Config::load(&cfg).expect("should load");
+    assert!(!dir.join(".rumor-ports.json").exists());
 }
 
 // ---------------------------------------------------------------------------

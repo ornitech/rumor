@@ -62,6 +62,7 @@ Top level: `{ "envFiles": [ ... ], "processes": [ ... ] }`, where each entry of
 | --- | --- | --- | --- |
 | `processes` | process[] | *required* | The processes to run. Must be non-empty. |
 | `envFiles` | string[] | `[]` | Global `.env` files loaded for **every** process, in order. Lowest precedence in the env merge (below each process's own `<cwd>/.env`, `envFiles`, and `env`). Relative paths resolve against the config file's directory. Use for a shared monorepo root `.env`/`.env.local` so each process doesn't have to declare it. |
+| `dynamicPorts` | string[] | `[]` | Env var names that rumor resolves to free ports, allocated once per config directory (so once per git worktree) and reused on every run. Injected into every process with the **highest** precedence in the env merge and usable in `${VAR}` substitution. See [Dynamic ports](#dynamic-ports-git-worktrees). |
 
 ### Process object
 
@@ -71,7 +72,7 @@ Top level: `{ "envFiles": [ ... ], "processes": [ ... ] }`, where each entry of
 | `command` | string | *required* | Executable to spawn. Supports `${VAR}` substitution. |
 | `args` | string[] | `[]` | Each entry supports `${VAR}` substitution. |
 | `cwd` | string | *required* | Working directory for the spawned process. Relative paths resolve against the **config file's directory**, not where `rumor` was invoked. |
-| `env` | object&lt;string, string&gt; | `{}` | Inline env vars. Highest precedence in the env merge. |
+| `env` | object&lt;string, string&gt; | `{}` | Inline env vars. Highest precedence in the env merge, below only the top-level `dynamicPorts` allocations. |
 | `envFiles` | string[] | `[]` | Extra `.env` files loaded in order *after* `<cwd>/.env`; later files override earlier ones. Relative paths resolve against the config file's directory. |
 | `dependsOn` | dependency[] | `[]` | Readiness gates that must pass before this process starts. |
 | `longLived` | bool | `true` | If `false`, a clean `exit 0` is shown as success (green) instead of a crash (red). Use for migrations and one-shot setup scripts. |
@@ -107,7 +108,8 @@ Substitution applies to:
 
 The lookup uses, in order (later wins): the orchestrator's own env, then the
 top-level (global) `envFiles`, then `<cwd>/.env`, then each per-process
-`envFiles` entry, then the process's `env` block. So env files referenced from
+`envFiles` entry, then the process's `env` block, then the top-level
+`dynamicPorts` allocations (always highest). So env files referenced from
 the config are loaded *before* substitution.
 
 A `${...}` whose contents aren't a strict identifier (e.g. `${RATE:-1}`) is
@@ -136,6 +138,45 @@ readiness check.
 }
 ```
 
+## Dynamic ports (git worktrees)
+
+Running the same config in several git worktrees normally means port clashes:
+every checkout binds the same hardcoded ports. Declare the port vars as
+`dynamicPorts` instead and rumor assigns each worktree its own:
+
+```json
+{
+  "dynamicPorts": ["API_PORT", "WEB_PORT"],
+  "processes": [
+    { "name": "api", "command": "./bin/api", "cwd": "./api" },
+    {
+      "name": "web",
+      "command": "npm",
+      "args": ["run", "dev", "--", "--port", "${WEB_PORT}"],
+      "cwd": "./web",
+      "dependsOn": [
+        { "name": "api", "until": { "port": "${API_PORT}" } }
+      ]
+    }
+  ]
+}
+```
+
+On first run, each listed var is bound to a free OS-assigned port and the
+allocation is saved to `.rumor-ports.json` next to the config file. Every
+later run reuses the stored ports verbatim, so they stay stable for that
+checkout. A different worktree is a different directory, gets its own
+`.rumor-ports.json`, and therefore its own ports — the two stacks run side
+by side without clashing.
+
+- The allocations are injected into every process's environment with the
+  highest precedence: a hardcoded `API_PORT` in an `.env` file or `env` block
+  cannot shadow a dynamic port.
+- Ports are reused without checking whether they're currently free; if a
+  leftover process still holds one, the owning process fails visibly.
+- Delete `.rumor-ports.json` to force reallocation.
+- Add `.rumor-ports.json` to your `.gitignore`.
+
 ## Examples
 
 ### [`examples/fullstack/`](examples/fullstack/) — four-service stack
@@ -146,7 +187,7 @@ A realistic four-service topology that exercises rumor's more interesting featur
 - **`api`** (python stdlib HTTP server) waits for both via port-based readiness checks (`dependsOn` + `until.port`).
 - **`frontend`** (python static server) waits for `api`.
 
-It also demonstrates the three-layer env merge: a central `examples/fullstack/.env` declared **once** in the top-level `envFiles` and shared by every service, per-service `<svc>/.env.local`, and a JSON `env` block on one service that overrides both files. Every `.env.local` overrides something visible (db's password, redis's log level, api's log level, frontend's title). Port numbers come from the shared `.env` and flow into both docker `-p` flags and `dependsOn.until.port` checks via `${VAR}` substitution, so a single edit reconfigures the whole stack.
+It also demonstrates the layered env merge: a central `examples/fullstack/.env` declared **once** in the top-level `envFiles` and shared by every service, per-service `<svc>/.env.local`, and a JSON `env` block on one service that overrides both files. Every `.env.local` overrides something visible (db's password, redis's log level, api's log level, frontend's title). All four port numbers are `dynamicPorts` — allocated per checkout, persisted in `.rumor-ports.json`, and flowing into docker `-p` flags, listen ports, and `dependsOn.until.port` checks via `${VAR}` substitution.
 
 Run:
 
@@ -156,7 +197,7 @@ rumor examples/fullstack/fullstack.config.json
 cargo run -- examples/fullstack/fullstack.config.json
 ```
 
-Requires `docker`, `python3`, and free ports `5432` / `6379` / `3000` / `8080`. Open <http://localhost:8080> for the frontend; see the example's [README](examples/fullstack/README.md) for the env-precedence table and verification steps.
+Requires `docker` and `python3` (no fixed free ports — they're allocated dynamically). The assigned ports are in `examples/fullstack/.rumor-ports.json`; open `http://localhost:<FRONTEND_PORT>` for the frontend. See the example's [README](examples/fullstack/README.md) for the env-precedence table and verification steps.
 
 ## Keys
 

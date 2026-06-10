@@ -1,6 +1,7 @@
 /target
 **/*.rs.bk
 *.log
+.rumor-ports.json
 .DS_Store
 .idea/
 .vscode/

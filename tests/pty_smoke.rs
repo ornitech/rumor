@@ -19,6 +19,8 @@ mod env;
 mod logfile;
 #[path = "../src/template.rs"]
 mod template;
+#[path = "../src/ports.rs"]
+mod ports;
 #[path = "../src/process.rs"]
 mod process;
 
@@ -74,6 +76,7 @@ async fn process_runs_under_pty_and_emits_output() {
         env_files: vec![],
         global_env_files: vec![],
         env: HashMap::new(),
+        dynamic_ports: HashMap::new(),
         depends_on: vec![],
         long_lived: true,
         tags: vec![],
@@ -123,6 +126,7 @@ async fn resize_replays_history_at_new_width() {
         env_files: vec![],
         global_env_files: vec![],
         env: HashMap::new(),
+        dynamic_ports: HashMap::new(),
         depends_on: vec![],
         long_lived: true,
         tags: vec![],
@@ -185,6 +189,7 @@ async fn dep_with_exit_condition_gates_dependent_spawn() {
         env_files: vec![],
         global_env_files: vec![],
         env: HashMap::new(),
+        dynamic_ports: HashMap::new(),
         depends_on: vec![],
         long_lived: false,
         tags: vec![],
@@ -198,6 +203,7 @@ async fn dep_with_exit_condition_gates_dependent_spawn() {
         env_files: vec![],
         global_env_files: vec![],
         env: HashMap::new(),
+        dynamic_ports: HashMap::new(),
         depends_on: vec![Dependency {
             name: "migrate".into(),
             until: ReadinessCondition::Exit(0),
@@ -256,6 +262,7 @@ async fn dep_with_log_condition_unblocks_dependent() {
         env_files: vec![],
         global_env_files: vec![],
         env: HashMap::new(),
+        dynamic_ports: HashMap::new(),
         depends_on: vec![],
         long_lived: true,
         tags: vec![],
@@ -268,6 +275,7 @@ async fn dep_with_log_condition_unblocks_dependent() {
         env_files: vec![],
         global_env_files: vec![],
         env: HashMap::new(),
+        dynamic_ports: HashMap::new(),
         depends_on: vec![Dependency {
             name: "server".into(),
             until: ReadinessCondition::Log(r"Listening on port \d+".into()),
@@ -311,6 +319,7 @@ async fn manager_kills_long_running_process_on_shutdown() {
         env_files: vec![],
         global_env_files: vec![],
         env: HashMap::new(),
+        dynamic_ports: HashMap::new(),
         depends_on: vec![],
         long_lived: true,
         tags: vec![],

@@ -1,5 +1,6 @@
 {
   "envFiles": ["./.env"],
+  "dynamicPorts": ["POSTGRES_PORT", "REDIS_PORT", "API_PORT", "FRONTEND_PORT"],
   "processes": [
     {
       "name": "db",
