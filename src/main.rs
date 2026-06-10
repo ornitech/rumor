@@ -6,6 +6,7 @@ mod keys;
 mod logfile;
 mod ports;
 mod process;
+mod search;
 mod status_color;
 mod template;
 mod ui;

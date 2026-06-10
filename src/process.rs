@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -59,6 +60,9 @@ pub struct Process {
     /// scrollback into a fresh parser on resize so wrap toggles and window
     /// grows visually reflow / refill existing output.
     raw: Arc<Mutex<VecDeque<u8>>>,
+    /// Total bytes ever read from the PTY. Cheap change detector for caches
+    /// keyed on output content (e.g. log search match positions).
+    bytes_seen: Arc<AtomicU64>,
     pub status_rx: watch::Receiver<Status>,
     status_tx: watch::Sender<Status>,
     writer_tx: mpsc::UnboundedSender<Vec<u8>>,
@@ -125,6 +129,7 @@ impl Process {
             SCROLLBACK,
         )));
         let raw: Arc<Mutex<VecDeque<u8>>> = Arc::new(Mutex::new(VecDeque::with_capacity(8192)));
+        let bytes_seen = Arc::new(AtomicU64::new(0));
 
         let reader = pair
             .master
@@ -166,6 +171,7 @@ impl Process {
             reader,
             Arc::clone(&parser),
             Arc::clone(&raw),
+            Arc::clone(&bytes_seen),
             cfg.name.clone(),
             log_writer,
         );
@@ -179,6 +185,7 @@ impl Process {
             env: env_snapshot,
             parser,
             raw,
+            bytes_seen,
             status_rx,
             status_tx,
             writer_tx,
@@ -202,6 +209,12 @@ impl Process {
     /// Snapshot of the raw byte ring buffer for things like log-regex matching.
     pub fn raw_snapshot(&self) -> Vec<u8> {
         self.raw.lock().unwrap().iter().copied().collect()
+    }
+
+    /// Monotonic counter that changes whenever new output arrives. Used as a
+    /// cache-invalidation key; the absolute value carries no meaning.
+    pub fn generation(&self) -> u64 {
+        self.bytes_seen.load(Ordering::Relaxed)
     }
 
     pub fn is_running(&self) -> bool {
@@ -293,6 +306,7 @@ fn spawn_read_task(
     mut reader: Box<dyn Read + Send>,
     parser: Arc<Mutex<vt100::Parser>>,
     raw: Arc<Mutex<VecDeque<u8>>>,
+    bytes_seen: Arc<AtomicU64>,
     name: String,
     mut log: Option<AnsiLogWriter>,
 ) -> JoinHandle<()> {
@@ -315,6 +329,7 @@ fn spawn_read_task(
                     if let Ok(mut p) = parser.lock() {
                         p.process(&buf[..n]);
                     }
+                    bytes_seen.fetch_add(n as u64, Ordering::Relaxed);
                     // Session log tee: lives on this thread only, no locks.
                     if let Some(l) = log.as_mut() {
                         l.write_chunk(&buf[..n]);

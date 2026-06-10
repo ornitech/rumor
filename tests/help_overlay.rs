@@ -17,8 +17,16 @@ mod env;
 mod logfile;
 #[path = "../src/template.rs"]
 mod template;
+#[path = "../src/ports.rs"]
+mod ports;
 #[path = "../src/process.rs"]
 mod process;
+#[path = "../src/search.rs"]
+mod search;
+#[path = "../src/status_color.rs"]
+mod status_color;
+#[path = "../src/ui.rs"]
+mod ui;
 
 use app::{App, Mode};
 use crossterm::event::{KeyCode, KeyEvent};

@@ -21,6 +21,12 @@ mod template;
 mod ports;
 #[path = "../src/process.rs"]
 mod process;
+#[path = "../src/search.rs"]
+mod search;
+#[path = "../src/status_color.rs"]
+mod status_color;
+#[path = "../src/ui.rs"]
+mod ui;
 
 use app::{adjust_tab_offset, tab_width, visible_tab_range};
 

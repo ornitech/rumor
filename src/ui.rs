@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -7,7 +9,13 @@ use tui_term::widget::PseudoTerminal;
 
 use crate::app::{App, Mode};
 use crate::process::{Slot, Status};
+use crate::search;
 use crate::status_color::exited_color;
+
+/// Style for the search match the cursor is on.
+const MATCH_CURRENT: Style = Style::new().fg(Color::Black).bg(Color::Yellow);
+/// Style for all other search matches.
+const MATCH_OTHER: Style = Style::new().fg(Color::White).bg(Color::DarkGray);
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
@@ -16,6 +24,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_shutdown(frame, app, area);
         return;
     }
+
+    app.pre_draw();
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -121,9 +131,14 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
 
     match app.mgr.slot(selected) {
         Slot::Process(proc) => {
-            let parser = proc.parser.lock().unwrap();
-            let term = PseudoTerminal::new(parser.screen()).block(block);
-            frame.render_widget(term, area);
+            let mut parser = proc.parser.lock().unwrap();
+            {
+                let term = PseudoTerminal::new(parser.screen()).block(block);
+                frame.render_widget(term, area);
+            }
+            if app.log_search.active && !app.log_search.matches.is_empty() {
+                draw_log_highlights(frame, app, &mut parser, area);
+            }
         }
         Slot::Waiting => {
             draw_diag_body(frame, app, selected, area, block, "waiting for dependencies", Color::Yellow);
@@ -145,6 +160,53 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
                 .block(block);
             frame.render_widget(p, area);
         }
+    }
+}
+
+/// Restyle the frame-buffer cells of search matches visible in the log view.
+/// tui-term draws visible screen cell (r, c) at (inner.x + c, inner.y + r),
+/// and at scrollback offset `s` the window covers absolute rows
+/// (total - s)..(total - s + height), so the mapping is direct.
+fn draw_log_highlights(frame: &mut Frame, app: &App, parser: &mut vt100::Parser, area: Rect) {
+    let inner = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let s = parser.screen().scrollback();
+    let total = search::probe_total(parser);
+    let top = total - s; // absolute row shown on the first visible line
+    let matches = &app.log_search.matches;
+    let first = matches.partition_point(|m| m.row < top);
+    let buf = frame.buffer_mut();
+    for (i, m) in matches.iter().enumerate().skip(first) {
+        let vis = m.row - top;
+        if vis >= inner.height as usize {
+            break; // sorted by row: nothing below is visible either
+        }
+        let col_start = m.col_start.min(inner.width);
+        let col_end = m.col_end.min(inner.width);
+        if col_start >= col_end {
+            continue;
+        }
+        let style = if i == app.log_search.current {
+            MATCH_CURRENT
+        } else {
+            MATCH_OTHER
+        };
+        buf.set_style(
+            Rect {
+                x: inner.x + col_start,
+                y: inner.y + vis as u16,
+                width: col_end - col_start,
+                height: 1,
+            },
+            style,
+        );
     }
 }
 
@@ -214,9 +276,9 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     let hints = match app.mode {
-        Mode::Nav => "  ←/→ tabs · ↑/↓ scroll · Enter focus · r restart · k kill · w wrap · y log path · d details · ^R/^K all · h help · q quit",
+        Mode::Nav => "  ←/→ tabs · ↑/↓ scroll · Enter focus · / search · r restart · k kill · w wrap · y log path · d details · ^R/^K all · h help · q quit",
         Mode::Focus => "  Esc leave focus · all other keys go to the process",
-        Mode::Details => "  ↑/↓ scroll · PgUp/PgDn ×10 · Home top · y copy log path · d/Esc close · h help",
+        Mode::Details => "  ↑/↓ scroll · PgUp/PgDn ×10 · Home top · / search · y copy log path · d/Esc close · h help",
     };
 
     let mut spans = vec![
@@ -232,7 +294,59 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::Black).bg(Color::Green),
         ));
     }
-    spans.push(Span::styled(hints, Style::default().fg(Color::DarkGray)));
+
+    // Search input bar / match indicator for the mode-appropriate search.
+    let (editing, active, query, count, current) = match app.mode {
+        Mode::Details => (
+            app.details_search.editing,
+            app.details_search.active,
+            app.details_search.query.as_str(),
+            app.details_search.matches.len(),
+            app.details_search.current,
+        ),
+        _ => (
+            app.log_search.editing,
+            app.log_search.active,
+            app.log_search.query.as_str(),
+            app.log_search.matches.len(),
+            app.log_search.current,
+        ),
+    };
+    if editing {
+        // Input bar replaces the hints; a reversed cell acts as the cursor.
+        spans.push(Span::styled(
+            format!(" /{query}"),
+            Style::default().fg(Color::White),
+        ));
+        spans.push(Span::styled(" ", Style::default().add_modifier(Modifier::REVERSED)));
+        spans.push(Span::styled(
+            "  Enter confirm · Esc cancel",
+            Style::default().fg(Color::DarkGray),
+        ));
+    } else if active {
+        // A confirmed search swaps the hints for search-mode keys.
+        let (text, style) = if count == 0 {
+            (
+                format!(" no matches /{query} "),
+                Style::default().fg(Color::White).bg(Color::Red),
+            )
+        } else {
+            (
+                format!(" ({}/{count}) /{query} ", current + 1),
+                Style::default().fg(Color::Black).bg(Color::Yellow),
+            )
+        };
+        spans.push(Span::styled(text, style));
+        // In Focus mode keys go to the child, so keep the Focus hints there.
+        let search_hints = match app.mode {
+            Mode::Details => "  n/N next/prev match · / new search · Esc clear · h help",
+            Mode::Nav => "  n older · N newer match · / new search · Esc clear · h help",
+            Mode::Focus => hints,
+        };
+        spans.push(Span::styled(search_hints, Style::default().fg(Color::DarkGray)));
+    } else {
+        spans.push(Span::styled(hints, Style::default().fg(Color::DarkGray)));
+    }
     let line = Line::from(spans);
 
     frame.render_widget(Paragraph::new(line), area);
@@ -278,11 +392,13 @@ fn slot_status_span(app: &App, idx: usize) -> Span<'static> {
     }
 }
 
-fn draw_details_body(frame: &mut Frame, app: &App, area: Rect) {
-    let idx = app.selected;
+/// The details pane content, one `Line` per rendered row. Shared by the
+/// renderer and the details search (which matches against the flattened
+/// text), so the two can never drift apart.
+pub fn details_lines(app: &App, idx: usize) -> Vec<Line<'static>> {
     let cfg = match app.mgr.configs().get(idx) {
         Some(c) => c,
-        None => return,
+        None => return Vec::new(),
     };
     let slot = app.mgr.slot(idx);
 
@@ -419,9 +535,73 @@ fn draw_details_body(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
+    lines
+}
+
+/// One line's text as the user sees it: span contents concatenated.
+pub fn flatten_line(line: &Line) -> String {
+    line.spans.iter().map(|s| s.content.as_ref()).collect()
+}
+
+/// Re-style the byte `ranges` (offsets into the flattened line text) of a
+/// details line as search matches, splitting spans at range boundaries.
+/// `ranges` must be sorted and non-overlapping (regex find order).
+fn highlight_line(line: Line<'static>, ranges: &[(Range<usize>, bool)]) -> Line<'static> {
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut span_start = 0usize;
+    for span in line.spans {
+        let text = span.content.into_owned();
+        let span_end = span_start + text.len();
+        let mut cursor = 0usize; // byte position within this span's text
+        for (r, current) in ranges {
+            let start = r.start.max(span_start);
+            let end = r.end.min(span_end);
+            if start >= end {
+                continue;
+            }
+            let (ls, le) = (start - span_start, end - span_start);
+            if ls > cursor {
+                out.push(Span::styled(text[cursor..ls].to_string(), span.style));
+            }
+            let style = if *current { MATCH_CURRENT } else { MATCH_OTHER };
+            out.push(Span::styled(text[ls..le].to_string(), style));
+            cursor = le;
+        }
+        if cursor < text.len() {
+            out.push(Span::styled(text[cursor..].to_string(), span.style));
+        }
+        span_start = span_end;
+    }
+    Line::from(out)
+}
+
+fn draw_details_body(frame: &mut Frame, app: &mut App, area: Rect) {
+    let idx = app.selected;
+    let mut lines = details_lines(app, idx);
+
+    // The pane is small (at most a few hundred short lines), so the details
+    // search recomputes every frame while active; this also keeps matches in
+    // step with live content like the status line.
+    if app.details_search.active {
+        let flat: Vec<String> = lines.iter().map(flatten_line).collect();
+        app.details_search.recompute(&flat);
+        for (mi, (line_idx, range)) in app.details_search.matches.iter().enumerate() {
+            let ranges = [(range.clone(), mi == app.details_search.current)];
+            if let Some(line) = lines.get_mut(*line_idx) {
+                *line = highlight_line(std::mem::take(line), &ranges);
+            }
+        }
+    }
+
+    let title = app
+        .mgr
+        .configs()
+        .get(idx)
+        .map(|c| c.name.clone())
+        .unwrap_or_default();
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" details: {} ", cfg.name));
+        .title(format!(" details: {title} "));
 
     let paragraph = Paragraph::new(lines)
         .block(block)
@@ -451,6 +631,7 @@ fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
     lines.push(entry("PgUp/PgDn", "scroll ×10"));
     lines.push(entry("Home/End", "scroll to top / bottom"));
     lines.push(entry("Enter", "focus the process (keys go to it)"));
+    lines.push(entry("/", "search output (see Search below)"));
     lines.push(entry("r / ^R", "restart process / all"));
     lines.push(entry("k / ^K", "kill process / all"));
     lines.push(entry("w", "toggle line wrap"));
@@ -467,9 +648,19 @@ fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
     lines.push(entry("↑/↓", "scroll"));
     lines.push(entry("PgUp/PgDn", "scroll ×10"));
     lines.push(entry("Home", "scroll to top"));
+    lines.push(entry("/", "search details (see Search below)"));
     lines.push(entry("y", "copy log path"));
     lines.push(entry("h", "this help"));
     lines.push(entry("d/Esc/q", "close details"));
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled("Search (output & details)", header_style)));
+    lines.push(entry("/", "open search; typing searches as you go"));
+    lines.push(entry("Enter", "confirm and keep the matches"));
+    lines.push(entry("Esc", "cancel input (restores view)"));
+    lines.push(entry("n / N", "older / newer match in output"));
+    lines.push(entry("n / N", "next / previous match in details"));
+    lines.push(entry("Esc", "clear a confirmed search"));
+    lines.push(entry("^U", "clear the query while typing"));
 
     let width = (area.width).min(56);
     let height = (area.height).min(lines.len() as u16 + 2); // + borders
