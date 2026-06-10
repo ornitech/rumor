@@ -210,19 +210,26 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     let hints = match app.mode {
-        Mode::Nav => "  ←/→ tabs · ↑/↓ scroll · Enter focus · r restart · k kill · w wrap · d details · ^R/^K all · q quit",
+        Mode::Nav => "  ←/→ tabs · ↑/↓ scroll · Enter focus · r restart · k kill · w wrap · y log path · d details · ^R/^K all · q quit",
         Mode::Focus => "  Esc leave focus · all other keys go to the process",
-        Mode::Details => "  ↑/↓ scroll · PgUp/PgDn ×10 · Home top · d/Esc close",
+        Mode::Details => "  ↑/↓ scroll · PgUp/PgDn ×10 · Home top · y copy log path · d/Esc close",
     };
 
-    let line = Line::from(vec![
+    let mut spans = vec![
         mode_span,
         Span::raw(" "),
         status_span,
         Span::raw(" "),
         wrap_span,
-        Span::styled(hints, Style::default().fg(Color::DarkGray)),
-    ]);
+    ];
+    if let Some(notice) = app.notice() {
+        spans.push(Span::styled(
+            format!(" {notice} "),
+            Style::default().fg(Color::Black).bg(Color::Green),
+        ));
+    }
+    spans.push(Span::styled(hints, Style::default().fg(Color::DarkGray)));
+    let line = Line::from(spans);
 
     frame.render_widget(Paragraph::new(line), area);
 }
@@ -324,6 +331,17 @@ fn draw_details_body(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled("Long-lived: ", label_style),
         Span::styled(cfg.long_lived.to_string(), value_style),
     ]));
+    lines.push(Line::from(match app.mgr.log_path(idx) {
+        Some(p) => vec![
+            Span::styled("Log:     ", label_style),
+            Span::styled(p.display().to_string(), value_style),
+            Span::styled("  (y to copy)", dim_style),
+        ],
+        None => vec![
+            Span::styled("Log:     ", label_style),
+            Span::styled("(session log capture disabled)", dim_style),
+        ],
+    }));
 
     lines.push(Line::raw(""));
     if cfg.env_files.is_empty() {

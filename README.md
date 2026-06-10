@@ -174,7 +174,8 @@ and **Details** (a read-only metadata screen for the selected process).
 | `Ctrl+R` | Restart all |
 | `Ctrl+K` | Kill all |
 | `w` | Toggle line-wrap on the selected tab |
-| `d` | Open the process details screen (`Esc`/`d` to close; `↑/↓`, `PgUp/PgDn`, `Home` to scroll) |
+| `y` | Copy the selected process's session log path to the clipboard (also works in the details screen) |
+| `d` | Open the process details screen (`Esc`/`d` to close; `↑/↓`, `PgUp/PgDn`, `Home` to scroll; `y` to copy the session log path) |
 | `q` / `Ctrl+C` | Quit |
 
 ## Status colors
@@ -210,6 +211,24 @@ confirm what a process was actually launched with. It shows:
 - **Environment** — the fully resolved, post-merge environment the process received (or, if
   it hasn't spawned yet, the config `env` overrides). This is the way to verify env-file
   layering and `${VAR}` substitution actually produced what you expected.
+- **Log** — the process's session log file. Press `y` to copy the path to the clipboard.
+
+## Session logs
+
+Every process's output is also captured to a plain-text file, ANSI escape codes stripped,
+so you can grep it or paste it into an LLM after something misbehaves. One directory per
+run:
+
+```
+~/Library/Logs/rumor/sessions/<config>-<YYYYMMDD-HHMMSS>/<process>.log   # macOS
+~/.local/share/rumor/sessions/...                                        # Linux
+```
+
+- Restarting a process appends to its file with a `----- restarted at HH:MM:SS -----` separator.
+- The session directory is printed to the terminal when rumor exits, `y` copies the selected
+  process's log path to the clipboard, and each file's path is shown in the details screen (`d`).
+- Sessions older than 7 days are deleted on startup.
+- Set `RUMOR_NO_SESSION_LOGS=1` to disable capture.
 
 ## Logs
 

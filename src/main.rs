@@ -1,7 +1,9 @@
 mod app;
+mod clipboard;
 mod config;
 mod env;
 mod keys;
+mod logfile;
 mod process;
 mod status_color;
 mod template;
@@ -49,10 +51,16 @@ fn body_inner_size(width: u16, height: u16) -> (u16, u16) {
     )
 }
 
+/// Base directory shared by rumor's own log file and the per-process session
+/// logs: `~/Library/Logs/rumor` (macOS) / `~/.local/share/rumor` (Linux).
+fn rumor_dir() -> PathBuf {
+    dirs_data_local()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("rumor")
+}
+
 fn init_tracing() {
-    let dir = dirs_data_local()
-        .unwrap_or_else(|| std::env::temp_dir())
-        .join("rumor");
+    let dir = rumor_dir();
     let _ = std::fs::create_dir_all(&dir);
     let file_appender = tracing_appender::rolling::never(&dir, "rumor.log");
     let subscriber = tracing_subscriber::fmt()
@@ -161,6 +169,26 @@ async fn main() -> Result<()> {
             .context("filtering processes by tags")?
     };
 
+    // Per-process session log capture. Always on; RUMOR_NO_SESSION_LOGS is the
+    // only escape hatch. A None session_dir disables capture but never rumor.
+    let sessions_root = rumor_dir().join("sessions");
+    let session_dir: Option<PathBuf> = if std::env::var_os("RUMOR_NO_SESSION_LOGS").is_some() {
+        None
+    } else {
+        let stem = config_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "rumor".to_string());
+        logfile::create_session_dir(&sessions_root, &stem)
+    };
+    if let Some(d) = &session_dir {
+        tracing::info!(dir = %d.display(), "session logs");
+    }
+    // Best-effort cleanup of old sessions, off the startup path.
+    tokio::task::spawn_blocking(move || {
+        logfile::cleanup_old_sessions(&sessions_root, Duration::from_secs(7 * 86_400));
+    });
+
     // Install a panic hook so a panic during the TUI loop doesn't leave the
     // terminal in raw / alternate-screen mode.
     let default_hook = std::panic::take_hook();
@@ -175,9 +203,15 @@ async fn main() -> Result<()> {
         execute!(stdout, EnterAlternateScreen).context("entering alt screen")?;
     }
 
-    let result = run(processes).await;
+    let result = run(processes, session_dir.clone()).await;
 
     restore_terminal();
+
+    // Printed after leaving the alternate screen so it stays selectable in the
+    // terminal — easy to copy into an LLM chat or bug report.
+    if let Some(d) = &session_dir {
+        println!("Session logs: {}", d.display());
+    }
 
     if let Err(e) = &result {
         eprintln!("rumor: {e:#}");
@@ -185,7 +219,10 @@ async fn main() -> Result<()> {
     result
 }
 
-async fn run(processes: Vec<crate::config::ProcessConfig>) -> Result<()> {
+async fn run(
+    processes: Vec<crate::config::ProcessConfig>,
+    session_dir: Option<PathBuf>,
+) -> Result<()> {
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("creating terminal")?;
     let term_size = terminal.size().context("reading terminal size")?;
@@ -197,7 +234,7 @@ async fn run(processes: Vec<crate::config::ProcessConfig>) -> Result<()> {
         pixel_height: 0,
     };
 
-    let mgr = ProcessManager::new(processes, initial_pty);
+    let mgr = ProcessManager::new(processes, initial_pty, session_dir);
     let mut app = App::new(mgr, body_rows, body_cols);
 
     let mut events = EventStream::new();
