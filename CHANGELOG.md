@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.0](https://github.com/ornitech/rumor/compare/v0.8.0...v0.9.0) (2026-06-10)
+
+
+### Features
+
+* **config:** dynamic per-worktree port allocation via dynamicPorts ([#24](https://github.com/ornitech/rumor/issues/24)) ([ebe2f2e](https://github.com/ornitech/rumor/commit/ebe2f2e862777ca09cf694e7af6aa1df8752e103))
+* **logs:** always-on session log capture with copyable log paths ([#21](https://github.com/ornitech/rumor/issues/21)) ([da48695](https://github.com/ornitech/rumor/commit/da48695d73db4680e8eeda8e92acd2b29b5d7109))
+* **ui:** hotkey help overlay on h ([#23](https://github.com/ornitech/rumor/issues/23)) ([4b63a74](https://github.com/ornitech/rumor/commit/4b63a74377b93759951b1360a124def5e7d1fa15))
+* **ui:** interactive search in log view and details pane ([#25](https://github.com/ornitech/rumor/issues/25)) ([7d4edc6](https://github.com/ornitech/rumor/commit/7d4edc68619d953e3fb2fdb2cb72e153b9296523))
+
 ## [0.8.0](https://github.com/ornitech/rumor/compare/v0.7.0...v0.8.0) (2026-06-08)
 
 
