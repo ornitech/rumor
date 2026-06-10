@@ -15,6 +15,8 @@ use portable_pty::PtySize;
 mod config;
 #[path = "../src/env.rs"]
 mod env;
+#[path = "../src/logfile.rs"]
+mod logfile;
 #[path = "../src/template.rs"]
 mod template;
 #[path = "../src/process.rs"]
@@ -78,7 +80,7 @@ async fn process_runs_under_pty_and_emits_output() {
     };
 
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
-    let mgr = ProcessManager::new(vec![cfg], size);
+    let mgr = ProcessManager::new(vec![cfg], size, None);
 
     let proc = wait_for_process(&mgr, 0).await;
     let _ = tokio::time::timeout(Duration::from_secs(5), proc.wait_for_exit()).await;
@@ -127,7 +129,7 @@ async fn resize_replays_history_at_new_width() {
     };
 
     let narrow = PtySize { rows: 10, cols: 40, pixel_width: 0, pixel_height: 0 };
-    let mgr = ProcessManager::new(vec![cfg], narrow);
+    let mgr = ProcessManager::new(vec![cfg], narrow, None);
     let proc = wait_for_process(&mgr, 0).await;
     let _ = tokio::time::timeout(Duration::from_secs(5), proc.wait_for_exit()).await;
 
@@ -205,7 +207,7 @@ async fn dep_with_exit_condition_gates_dependent_spawn() {
     };
 
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
-    let mgr = ProcessManager::new(vec![migrate, api], size);
+    let mgr = ProcessManager::new(vec![migrate, api], size, None);
 
     // While migrate is still sleeping, api should be Waiting (not yet spawned).
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -275,7 +277,7 @@ async fn dep_with_log_condition_unblocks_dependent() {
     };
 
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
-    let mgr = ProcessManager::new(vec![server, client], size);
+    let mgr = ProcessManager::new(vec![server, client], size, None);
 
     // Before server emits the line, client must be Waiting.
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -315,7 +317,7 @@ async fn manager_kills_long_running_process_on_shutdown() {
     };
 
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
-    let mgr = ProcessManager::new(vec![cfg], size);
+    let mgr = ProcessManager::new(vec![cfg], size, None);
 
     let proc = wait_for_process(&mgr, 0).await;
     tokio::time::sleep(Duration::from_millis(300)).await;

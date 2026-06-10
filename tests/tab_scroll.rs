@@ -11,6 +11,8 @@ mod keys;
 mod config;
 #[path = "../src/env.rs"]
 mod env;
+#[path = "../src/logfile.rs"]
+mod logfile;
 #[path = "../src/template.rs"]
 mod template;
 #[path = "../src/process.rs"]

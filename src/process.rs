@@ -20,6 +20,7 @@ const SCROLLBACK: usize = 2000;
 
 use crate::config::ProcessConfig;
 use crate::env;
+use crate::logfile::AnsiLogWriter;
 
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -70,7 +71,7 @@ pub struct Process {
 }
 
 impl Process {
-    pub fn spawn(cfg: &ProcessConfig, size: PtySize) -> Result<Self> {
+    pub fn spawn(cfg: &ProcessConfig, size: PtySize, log_path: Option<&std::path::Path>) -> Result<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(size)
@@ -134,11 +135,33 @@ impl Process {
         let (status_tx, status_rx) = watch::channel(Status::Starting);
         let _ = status_tx.send(Status::Running);
 
+        // Session log capture is strictly best-effort: any failure here warns
+        // and proceeds without a log file. Spawn never fails because of it.
+        let log_writer = log_path.and_then(|path| {
+            match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                Ok(mut file) => {
+                    // A non-empty file means this slot respawned within the
+                    // session; mark the boundary. Written pre-stripper so it
+                    // never interleaves mid-escape.
+                    if file.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+                        let _ = writeln!(file, "\n----- restarted at {} -----", now_hms());
+                    }
+                    Some(AnsiLogWriter::new(file, cfg.name.clone()))
+                }
+                Err(e) => {
+                    warn!(name = %cfg.name, path = %path.display(), error = %e,
+                        "could not open session log; capture disabled for this process");
+                    None
+                }
+            }
+        });
+
         let read_task = spawn_read_task(
             reader,
             Arc::clone(&parser),
             Arc::clone(&raw),
             cfg.name.clone(),
+            log_writer,
         );
         let (writer_tx, writer_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let write_task = spawn_write_task(writer, writer_rx, cfg.name.clone());
@@ -265,6 +288,7 @@ fn spawn_read_task(
     parser: Arc<Mutex<vt100::Parser>>,
     raw: Arc<Mutex<VecDeque<u8>>>,
     name: String,
+    mut log: Option<AnsiLogWriter>,
 ) -> JoinHandle<()> {
     tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 8192];
@@ -285,12 +309,19 @@ fn spawn_read_task(
                     if let Ok(mut p) = parser.lock() {
                         p.process(&buf[..n]);
                     }
+                    // Session log tee: lives on this thread only, no locks.
+                    if let Some(l) = log.as_mut() {
+                        l.write_chunk(&buf[..n]);
+                    }
                 }
                 Err(e) => {
                     debug!(name = %name, error = %e, "pty reader error");
                     break;
                 }
             }
+        }
+        if let Some(mut l) = log.take() {
+            l.flush();
         }
     })
 }
@@ -411,12 +442,20 @@ struct ManagerInner {
     /// with the live display by `App::resize_one` via `set_size`, so a restarted
     /// or dependency-delayed process spawns at the current, wrap-aware width.
     sizes: Vec<StdMutex<PtySize>>,
+    /// Session log file per slot, fixed for the manager's lifetime. Respawns
+    /// reuse the same path, which is what gives restart-append semantics.
+    /// All None when session log capture is disabled.
+    log_paths: Vec<Option<std::path::PathBuf>>,
 }
 
 const DIAG_CAP: usize = 200;
 
 impl ProcessManager {
-    pub fn new(configs: Vec<ProcessConfig>, size: PtySize) -> Self {
+    pub fn new(
+        configs: Vec<ProcessConfig>,
+        size: PtySize,
+        session_dir: Option<std::path::PathBuf>,
+    ) -> Self {
         let name_to_idx = configs
             .iter()
             .enumerate()
@@ -433,6 +472,10 @@ impl ProcessManager {
         let sizes = (0..configs.len())
             .map(|_| StdMutex::new(size))
             .collect();
+        let log_paths = match &session_dir {
+            Some(dir) => crate::logfile::assign_log_paths(&configs, dir),
+            None => vec![None; configs.len()],
+        };
         let inner = Arc::new(ManagerInner {
             configs,
             slots,
@@ -440,6 +483,7 @@ impl ProcessManager {
             diagnostics,
             name_to_idx,
             sizes,
+            log_paths,
         });
         let mgr = Self { inner };
         mgr.start_all();
@@ -468,6 +512,13 @@ impl ProcessManager {
             .iter()
             .cloned()
             .collect()
+    }
+
+    /// Session log file for a slot, if capture is enabled. Manager-level (not
+    /// on `Process`) so the UI can show it even while the slot is Waiting /
+    /// Blocked / SpawnFailed.
+    pub fn log_path(&self, idx: usize) -> Option<&std::path::Path> {
+        self.inner.log_paths[idx].as_deref()
     }
 
     pub fn process(&self, idx: usize) -> Option<Arc<Process>> {
@@ -755,7 +806,7 @@ async fn watch_slot(
         // All deps cleared; spawn this process.
         push_diag(&inner, idx, "all dependencies ready; spawning");
         let size = *inner.sizes[idx].lock().unwrap();
-        match Process::spawn(&cfg, size) {
+        match Process::spawn(&cfg, size, inner.log_paths[idx].as_deref()) {
             Ok(p) => {
                 push_diag(&inner, idx, format!("spawned (pid {})", p.pid));
                 slot_tx.send_replace(Slot::Process(Arc::new(p)));
