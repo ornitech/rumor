@@ -522,7 +522,7 @@ impl ProcessManager {
     }
 
     pub fn process(&self, idx: usize) -> Option<Arc<Process>> {
-        match self.slot(idx) {
+        match self.inner.slots.get(idx)?.borrow().clone() {
             Slot::Process(p) => Some(p),
             _ => None,
         }
