@@ -5,6 +5,7 @@ use portable_pty::PtySize;
 
 use crate::keys::encode_key;
 use crate::process::ProcessManager;
+use crate::search::{self, DetailsSearch, LogSearch};
 
 /// When wrap is disabled, set the PTY this wide so the child writes long
 /// lines as a single row in the vt100 grid. The display widget clips the
@@ -51,6 +52,10 @@ pub struct App {
     pub help_scroll: u16,
     /// Transient status-line feedback (e.g. clipboard copy result).
     notice: Option<(String, Instant)>,
+    /// Search over the selected process's log view (Nav mode).
+    pub log_search: LogSearch,
+    /// Search over the details pane (Details mode).
+    pub details_search: DetailsSearch,
 }
 
 impl App {
@@ -71,6 +76,8 @@ impl App {
             help_visible: false,
             help_scroll: 0,
             notice: None,
+            log_search: LogSearch::default(),
+            details_search: DetailsSearch::default(),
         }
     }
 
@@ -164,10 +171,24 @@ impl App {
             }
             return;
         }
+        // Search input bar captures all printable keys. Only reachable from
+        // Nav/Details (search can't open in Focus), so Focus passthrough is
+        // unaffected.
+        if self.search_editing() {
+            self.handle_search_input_key(key);
+            return;
+        }
         match self.mode {
             Mode::Nav => self.handle_nav_key(key),
             Mode::Focus => self.handle_focus_key(key),
             Mode::Details => self.handle_details_key(key),
+        }
+    }
+
+    fn search_editing(&self) -> bool {
+        match self.mode {
+            Mode::Details => self.details_search.editing,
+            _ => self.log_search.editing,
         }
     }
 
@@ -228,7 +249,12 @@ impl App {
                 self.mode = Mode::Details;
                 self.details_scroll = 0;
                 self.notice = None;
+                self.details_search.clear();
             }
+            KeyCode::Char('/') if !ctrl => self.open_log_search(),
+            KeyCode::Char('n') if !ctrl && self.log_search.active => self.log_search_step(-1),
+            KeyCode::Char('N') if self.log_search.active => self.log_search_step(1),
+            KeyCode::Esc if self.log_search.active => self.log_search.clear(),
             KeyCode::PageUp => self.scroll_by(10),
             KeyCode::PageDown => self.scroll_by(-10),
             KeyCode::Home => self.scroll_to_top(),
@@ -239,9 +265,13 @@ impl App {
 
     fn handle_details_key(&mut self, key: KeyEvent) {
         match key.code {
+            KeyCode::Esc if self.details_search.active => self.details_search.clear(),
             KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('q') => {
                 self.mode = Mode::Nav;
             }
+            KeyCode::Char('/') => self.open_details_search(),
+            KeyCode::Char('n') if self.details_search.active => self.details_search_step(1),
+            KeyCode::Char('N') if self.details_search.active => self.details_search_step(-1),
             KeyCode::Char('y') => self.copy_log_path(),
             KeyCode::Char('h') => self.open_help(),
             KeyCode::Up => {
@@ -264,6 +294,150 @@ impl App {
     fn open_help(&mut self) {
         self.help_visible = true;
         self.help_scroll = 0;
+    }
+
+    /// Keys while the search input bar is open (Nav → log search, Details →
+    /// details search). Printable characters edit the query live.
+    fn handle_search_input_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let in_details = self.mode == Mode::Details;
+        match key.code {
+            KeyCode::Esc => {
+                if in_details {
+                    self.details_search.clear();
+                } else {
+                    if let Some(s) = self.log_search.saved_scrollback {
+                        self.set_scroll(s);
+                    }
+                    self.log_search.clear();
+                }
+            }
+            KeyCode::Enter => {
+                if in_details {
+                    self.details_search.editing = false;
+                    if self.details_search.query.is_empty() {
+                        self.details_search.clear();
+                    }
+                } else {
+                    self.log_search.editing = false;
+                    if self.log_search.query.is_empty() {
+                        self.log_search.clear();
+                    }
+                }
+            }
+            KeyCode::Char('u') if ctrl => self.edit_search_query(|q| q.clear()),
+            KeyCode::Backspace => self.edit_search_query(|q| {
+                q.pop();
+            }),
+            KeyCode::Char(c) if !ctrl => self.edit_search_query(|q| q.push(c)),
+            _ => {}
+        }
+    }
+
+    fn edit_search_query(&mut self, f: impl FnOnce(&mut String)) {
+        if self.mode == Mode::Details {
+            f(&mut self.details_search.query);
+            let lines = self.details_flat_lines();
+            self.details_search.recompute(&lines);
+            self.jump_to_details_match();
+        } else {
+            f(&mut self.log_search.query);
+            if let Some(p) = self.mgr.process(self.selected) {
+                self.log_search.recompute_if_needed(&p);
+            }
+            self.jump_to_log_match();
+        }
+    }
+
+    fn open_log_search(&mut self) {
+        match self.mgr.process(self.selected) {
+            Some(p) => {
+                self.log_search.clear();
+                self.log_search.editing = true;
+                self.log_search.active = true;
+                self.log_search.saved_scrollback =
+                    Some(p.parser.lock().unwrap().screen().scrollback());
+            }
+            None => {
+                self.notice = Some(("no process output to search".to_string(), Instant::now()));
+            }
+        }
+    }
+
+    fn open_details_search(&mut self) {
+        self.details_search.clear();
+        self.details_search.editing = true;
+        self.details_search.active = true;
+    }
+
+    /// Move to the next (+1 = newer) / previous (-1 = older) log match.
+    fn log_search_step(&mut self, delta: i32) {
+        if let Some(p) = self.mgr.process(self.selected) {
+            self.log_search.recompute_if_needed(&p);
+        }
+        self.log_search.step(delta);
+        self.jump_to_log_match();
+    }
+
+    fn details_search_step(&mut self, delta: i32) {
+        let lines = self.details_flat_lines();
+        self.details_search.recompute(&lines);
+        self.details_search.step(delta);
+        self.jump_to_details_match();
+    }
+
+    /// Scroll the log view so the current match is visible (centered), unless
+    /// it already is.
+    fn jump_to_log_match(&mut self) {
+        let Some(m) = self.log_search.matches.get(self.log_search.current).copied() else {
+            return;
+        };
+        if let Some(p) = self.mgr.process(self.selected) {
+            let mut parser = p.parser.lock().unwrap();
+            let total = search::probe_total(&mut parser);
+            let (rows, _) = parser.screen().size();
+            let s = parser.screen().scrollback();
+            let top = total - s;
+            if (top..top + rows as usize).contains(&m.row) {
+                return;
+            }
+            let target = search::center_scrollback(total, rows, m.row);
+            parser.screen_mut().set_scrollback(target);
+        }
+    }
+
+    fn jump_to_details_match(&mut self) {
+        if let Some((line, _)) = self.details_search.matches.get(self.details_search.current) {
+            self.details_scroll = (*line as u16).saturating_sub(self.display_rows / 2);
+        }
+    }
+
+    /// Flattened text of the details pane, one string per rendered line.
+    fn details_flat_lines(&self) -> Vec<String> {
+        crate::ui::details_lines(self, self.selected)
+            .iter()
+            .map(crate::ui::flatten_line)
+            .collect()
+    }
+
+    /// Cheap per-frame hook: refresh log-search matches when the underlying
+    /// content changed, throttled so heavy output can't trigger a rescan more
+    /// than every `search::STREAM_REFRESH`. Costs one key comparison when
+    /// nothing changed.
+    pub fn pre_draw(&mut self) {
+        if !self.log_search.active || self.mode == Mode::Details {
+            return;
+        }
+        if let Some(p) = self.mgr.process(self.selected) {
+            match self.log_search.stale_kind(&p) {
+                // Only new output arrived: wait out the throttle window.
+                Some(search::Staleness::GenerationOnly) if !self.log_search.stream_refresh_due() => {}
+                Some(_) => {
+                    self.log_search.recompute_if_needed(&p);
+                }
+                None => {}
+            }
+        }
     }
 
     fn handle_focus_key(&mut self, key: KeyEvent) {
