@@ -7,6 +7,8 @@ mod app;
 // minimally so this test target compiles without the full dependency graph.
 #[path = "../src/keys.rs"]
 mod keys;
+#[path = "../src/clipboard.rs"]
+mod clipboard;
 #[path = "../src/config.rs"]
 mod config;
 #[path = "../src/env.rs"]

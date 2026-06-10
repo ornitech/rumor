@@ -20,6 +20,9 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 /// SIGKILL (e.g. stuck in uninterruptible sleep).
 const SHUTDOWN_DEADLINE_SLACK: Duration = Duration::from_millis(500);
 
+/// How long a transient details-screen notice ("log path copied") stays up.
+const NOTICE_TTL: Duration = Duration::from_secs(2);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Nav,
@@ -42,6 +45,8 @@ pub struct App {
     pub display_cols: u16,
     pub tab_offset: usize,
     pub details_scroll: u16,
+    /// Transient status-line feedback (e.g. clipboard copy result).
+    notice: Option<(String, Instant)>,
 }
 
 impl App {
@@ -59,7 +64,32 @@ impl App {
             display_cols,
             tab_offset: 0,
             details_scroll: 0,
+            notice: None,
         }
+    }
+
+    /// Current status-line notice, if it hasn't expired yet.
+    pub fn notice(&self) -> Option<&str> {
+        match &self.notice {
+            Some((msg, at)) if at.elapsed() < NOTICE_TTL => Some(msg),
+            _ => None,
+        }
+    }
+
+    /// Copy the selected process's session log path to the clipboard and
+    /// surface the result in the status line.
+    fn copy_log_path(&mut self) {
+        let msg = match self.mgr.log_path(self.selected) {
+            Some(p) => {
+                if crate::clipboard::copy(&p.display().to_string()) {
+                    "log path copied"
+                } else {
+                    "copy failed"
+                }
+            }
+            None => "no log file (capture disabled)",
+        };
+        self.notice = Some((msg.to_string(), Instant::now()));
     }
 
     pub fn wrap_of(&self, idx: usize) -> bool {
@@ -170,9 +200,11 @@ impl App {
             }
             KeyCode::Char('k') if ctrl => self.mgr.kill_all(),
             KeyCode::Char('w') if !ctrl => self.toggle_wrap(),
+            KeyCode::Char('y') if !ctrl => self.copy_log_path(),
             KeyCode::Char('d') if !ctrl => {
                 self.mode = Mode::Details;
                 self.details_scroll = 0;
+                self.notice = None;
             }
             KeyCode::PageUp => self.scroll_by(10),
             KeyCode::PageDown => self.scroll_by(-10),
@@ -187,6 +219,7 @@ impl App {
             KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('q') => {
                 self.mode = Mode::Nav;
             }
+            KeyCode::Char('y') => self.copy_log_path(),
             KeyCode::Up => {
                 self.details_scroll = self.details_scroll.saturating_sub(1);
             }
