@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs};
 use ratatui::Frame;
 use tui_term::widget::PseudoTerminal;
 
@@ -33,6 +33,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_body(frame, app, chunks[1]);
     }
     draw_status(frame, app, chunks[2]);
+
+    if app.help_visible {
+        draw_help(frame, app, area);
+    }
 }
 
 fn draw_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -210,9 +214,9 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     let hints = match app.mode {
-        Mode::Nav => "  ←/→ tabs · ↑/↓ scroll · Enter focus · r restart · k kill · w wrap · y log path · d details · ^R/^K all · q quit",
+        Mode::Nav => "  ←/→ tabs · ↑/↓ scroll · Enter focus · r restart · k kill · w wrap · y log path · d details · ^R/^K all · h help · q quit",
         Mode::Focus => "  Esc leave focus · all other keys go to the process",
-        Mode::Details => "  ↑/↓ scroll · PgUp/PgDn ×10 · Home top · y copy log path · d/Esc close",
+        Mode::Details => "  ↑/↓ scroll · PgUp/PgDn ×10 · Home top · y copy log path · d/Esc close · h help",
     };
 
     let mut spans = vec![
@@ -423,6 +427,86 @@ fn draw_details_body(frame: &mut Frame, app: &App, area: Rect) {
         .block(block)
         .scroll((app.details_scroll, 0));
     frame.render_widget(paragraph, area);
+}
+
+/// Centered overlay listing every hotkey per mode. Must mirror the bindings
+/// in `app.rs` (`handle_nav_key` / `handle_focus_key` / `handle_details_key`).
+/// Scrollable (↑/↓) when the terminal is too short to fit all of it.
+fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
+    let header_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let key_style = Style::default().fg(Color::White);
+    let desc_style = Style::default().fg(Color::Gray);
+
+    let entry = |key: &str, desc: &str| {
+        Line::from(vec![
+            Span::styled(format!("  {key:<12}"), key_style),
+            Span::styled(desc.to_string(), desc_style),
+        ])
+    };
+
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled("Navigation", header_style)));
+    lines.push(entry("←/→", "previous / next tab"));
+    lines.push(entry("↑/↓", "scroll output"));
+    lines.push(entry("PgUp/PgDn", "scroll ×10"));
+    lines.push(entry("Home/End", "scroll to top / bottom"));
+    lines.push(entry("Enter", "focus the process (keys go to it)"));
+    lines.push(entry("r / ^R", "restart process / all"));
+    lines.push(entry("k / ^K", "kill process / all"));
+    lines.push(entry("w", "toggle line wrap"));
+    lines.push(entry("y", "copy log path"));
+    lines.push(entry("d", "process details"));
+    lines.push(entry("h", "this help"));
+    lines.push(entry("q / ^C", "quit"));
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled("Focus", header_style)));
+    lines.push(entry("Esc", "leave focus"));
+    lines.push(entry("(other)", "sent to the process"));
+    lines.push(Line::raw(""));
+    lines.push(Line::from(Span::styled("Details", header_style)));
+    lines.push(entry("↑/↓", "scroll"));
+    lines.push(entry("PgUp/PgDn", "scroll ×10"));
+    lines.push(entry("Home", "scroll to top"));
+    lines.push(entry("y", "copy log path"));
+    lines.push(entry("h", "this help"));
+    lines.push(entry("d/Esc/q", "close details"));
+
+    let width = (area.width).min(56);
+    let height = (area.height).min(lines.len() as u16 + 2); // + borders
+    let rect = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    };
+
+    // Clamp the scroll offset so the last content line stops at the bottom
+    // border instead of scrolling off into blank space.
+    let inner_height = rect.height.saturating_sub(2) as usize; // borders
+    let max_scroll = lines.len().saturating_sub(inner_height) as u16;
+    app.help_scroll = app.help_scroll.min(max_scroll);
+
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Hotkeys (Esc/h to close) ");
+    if max_scroll > 0 {
+        let above = app.help_scroll > 0;
+        let below = app.help_scroll < max_scroll;
+        let hint = match (above, below) {
+            (true, true) => " ↑/↓ more ",
+            (true, false) => " ↑ more ",
+            _ => " ↓ more ",
+        };
+        block = block.title_bottom(
+            Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray)))
+                .right_aligned(),
+        );
+    }
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines).block(block).scroll((app.help_scroll, 0)),
+        rect,
+    );
 }
 
 const SPINNER: [&str; 4] = ["|", "/", "-", "\\"];

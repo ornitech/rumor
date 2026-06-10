@@ -45,6 +45,10 @@ pub struct App {
     pub display_cols: u16,
     pub tab_offset: usize,
     pub details_scroll: u16,
+    /// Hotkey help overlay, drawn on top of whatever mode is active.
+    pub help_visible: bool,
+    /// Scroll offset for the help overlay when it doesn't fit the terminal.
+    pub help_scroll: u16,
     /// Transient status-line feedback (e.g. clipboard copy result).
     notice: Option<(String, Instant)>,
 }
@@ -64,6 +68,8 @@ impl App {
             display_cols,
             tab_offset: 0,
             details_scroll: 0,
+            help_visible: false,
+            help_scroll: 0,
             notice: None,
         }
     }
@@ -142,6 +148,22 @@ impl App {
             }
             return;
         }
+        if self.help_visible {
+            // Swallow everything; only close and scroll keys do anything.
+            // The draw code clamps the offset to the actual content height.
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('h') | KeyCode::Char('q') => {
+                    self.help_visible = false;
+                }
+                KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
+                KeyCode::Down => self.help_scroll = self.help_scroll.saturating_add(1),
+                KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(10),
+                KeyCode::PageDown => self.help_scroll = self.help_scroll.saturating_add(10),
+                KeyCode::Home => self.help_scroll = 0,
+                _ => {}
+            }
+            return;
+        }
         match self.mode {
             Mode::Nav => self.handle_nav_key(key),
             Mode::Focus => self.handle_focus_key(key),
@@ -201,6 +223,7 @@ impl App {
             KeyCode::Char('k') if ctrl => self.mgr.kill_all(),
             KeyCode::Char('w') if !ctrl => self.toggle_wrap(),
             KeyCode::Char('y') if !ctrl => self.copy_log_path(),
+            KeyCode::Char('h') if !ctrl => self.open_help(),
             KeyCode::Char('d') if !ctrl => {
                 self.mode = Mode::Details;
                 self.details_scroll = 0;
@@ -220,6 +243,7 @@ impl App {
                 self.mode = Mode::Nav;
             }
             KeyCode::Char('y') => self.copy_log_path(),
+            KeyCode::Char('h') => self.open_help(),
             KeyCode::Up => {
                 self.details_scroll = self.details_scroll.saturating_sub(1);
             }
@@ -235,6 +259,11 @@ impl App {
             KeyCode::Home => self.details_scroll = 0,
             _ => {}
         }
+    }
+
+    fn open_help(&mut self) {
+        self.help_visible = true;
+        self.help_scroll = 0;
     }
 
     fn handle_focus_key(&mut self, key: KeyEvent) {

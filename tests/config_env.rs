@@ -734,13 +734,17 @@ fn unterminated_template_errors() {
 // ---------------------------------------------------------------------------
 
 fn tempdir() -> PathBuf {
+    // Counter disambiguates parallel tests that land on the same timestamp
+    // (the system clock is coarser than nanos), which made dirs collide.
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let base = std::env::temp_dir().join(format!(
-        "rumor-test-{}-{}",
+        "rumor-test-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&base).unwrap();
     base.canonicalize().unwrap()
