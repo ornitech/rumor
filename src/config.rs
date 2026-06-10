@@ -5,6 +5,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
 use crate::env as envmod;
+use crate::ports;
 use crate::template;
 
 #[derive(Debug, Clone)]
@@ -36,6 +37,10 @@ pub struct ProcessConfig {
     /// lowest config-declared precedence. Canonicalized at load time.
     pub global_env_files: Vec<PathBuf>,
     pub env: HashMap<String, String>,
+    /// Ports allocated for the top-level `dynamicPorts` vars, as decimal
+    /// strings. Injected with highest precedence (above the JSON `env` block).
+    /// Cloned per process so spawn-time env matches load-time substitution.
+    pub dynamic_ports: HashMap<String, String>,
     pub depends_on: Vec<Dependency>,
     /// True for services that should run forever (default). False for one-shot
     /// scripts where a clean `exit 0` is success, not a crash.
@@ -58,6 +63,8 @@ pub struct Config {
 pub struct LoadedConfig {
     pub config: Config,
     pub config_dir: PathBuf,
+    /// The resolved `dynamicPorts` allocations (empty when none declared).
+    pub dynamic_ports: HashMap<String, String>,
 }
 
 // --- Raw (pre-substitution) deserialization shapes ---------------------------
@@ -106,6 +113,8 @@ struct RawProcessConfig {
 struct RawConfig {
     #[serde(default, rename = "envFiles")]
     env_files: Vec<PathBuf>,
+    #[serde(default, rename = "dynamicPorts")]
+    dynamic_ports: Vec<String>,
     processes: Vec<RawProcessConfig>,
 }
 
@@ -128,6 +137,11 @@ impl Config {
         if raw.processes.is_empty() {
             return Err(anyhow!("config has no processes"));
         }
+
+        // Resolve dynamic ports before any substitution so every process sees
+        // the same allocated values, both in templates and at spawn time.
+        let dynamic_ports = ports::resolve_dynamic_ports(&raw.dynamic_ports, &config_dir)
+            .context("resolving dynamicPorts")?;
 
         // Root-level env files, shared by every process. Resolved once.
         let mut global_env_files = raw.env_files;
@@ -182,7 +196,8 @@ impl Config {
 
             // Build the env used both to spawn the child and to substitute
             // ${VAR} references in this process's templated fields.
-            let subst_env = envmod::build_env(&cwd, &global_env_files, &env_files, &env)
+            let subst_env =
+                envmod::build_env(&cwd, &global_env_files, &env_files, &env, &dynamic_ports)
                 .with_context(|| {
                     format!("process {}: building env for template substitution", name)
                 })?;
@@ -268,6 +283,7 @@ impl Config {
                 env_files,
                 global_env_files: global_env_files.clone(),
                 env,
+                dynamic_ports: dynamic_ports.clone(),
                 depends_on: deps,
                 long_lived,
                 tags: tags
@@ -283,6 +299,7 @@ impl Config {
         Ok(LoadedConfig {
             config: Config { processes },
             config_dir,
+            dynamic_ports,
         })
     }
 }
@@ -436,6 +453,7 @@ mod tests {
             env_files: vec![],
             global_env_files: vec![],
             env: HashMap::new(),
+            dynamic_ports: HashMap::new(),
             depends_on: deps
                 .iter()
                 .map(|d| Dependency {

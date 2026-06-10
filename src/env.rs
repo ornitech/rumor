@@ -12,11 +12,14 @@ use anyhow::{Context, Result};
 /// 3. `<cwd>/.env` if it exists (auto-discovered, never mutates our own env).
 /// 4. Each path in `env_files`, in order.
 /// 5. The JSON config's `env` block (explicit overrides).
+/// 6. The top-level `dynamicPorts` allocations. Always highest, so a stale
+///    hardcoded value in an env file can't shadow a dynamic port.
 pub fn build_env(
     cwd: &Path,
     global_env_files: &[std::path::PathBuf],
     env_files: &[std::path::PathBuf],
     json_env: &HashMap<String, String>,
+    dynamic_ports: &HashMap<String, String>,
 ) -> Result<HashMap<String, String>> {
     let mut env: HashMap<String, String> = std::env::vars().collect();
 
@@ -34,6 +37,10 @@ pub fn build_env(
     }
 
     for (k, v) in json_env {
+        env.insert(k.clone(), v.clone());
+    }
+
+    for (k, v) in dynamic_ports {
         env.insert(k.clone(), v.clone());
     }
 

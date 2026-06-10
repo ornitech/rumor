@@ -256,6 +256,7 @@ mod tests {
             env_files: vec![],
             global_env_files: vec![],
             env: StdHashMap::new(),
+            dynamic_ports: StdHashMap::new(),
             depends_on: vec![],
             long_lived: true,
             tags: vec![],

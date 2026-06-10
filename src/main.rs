@@ -4,6 +4,7 @@ mod config;
 mod env;
 mod keys;
 mod logfile;
+mod ports;
 mod process;
 mod status_color;
 mod template;
@@ -161,6 +162,15 @@ async fn main() -> Result<()> {
 
     init_tracing();
     let loaded = Config::load(&config_path).context("loading config")?;
+    if !loaded.dynamic_ports.is_empty() {
+        let mut assigned: Vec<String> = loaded
+            .dynamic_ports
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        assigned.sort();
+        tracing::info!("dynamic ports: {}", assigned.join(" "));
+    }
 
     let processes = if tags.is_empty() {
         loaded.config.processes

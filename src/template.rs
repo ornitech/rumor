@@ -80,7 +80,7 @@ pub fn substitute(input: &str, env: &HashMap<String, String>, context: &str) -> 
     Ok(out)
 }
 
-fn is_strict_ident(s: &str) -> bool {
+pub(crate) fn is_strict_ident(s: &str) -> bool {
     let bytes = s.as_bytes();
     if bytes.is_empty() {
         return false;

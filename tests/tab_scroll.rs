@@ -17,6 +17,8 @@ mod env;
 mod logfile;
 #[path = "../src/template.rs"]
 mod template;
+#[path = "../src/ports.rs"]
+mod ports;
 #[path = "../src/process.rs"]
 mod process;
 
