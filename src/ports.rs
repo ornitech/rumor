@@ -108,12 +108,20 @@ fn read_store(path: &Path) -> BTreeMap<String, u16> {
     out
 }
 
-/// Write via a pid-suffixed sibling temp file + rename, so a concurrent rumor
-/// instance never observes a torn file.
+/// Write via a uniquely-suffixed sibling temp file + rename, so a concurrent
+/// rumor instance never observes a torn file. The suffix combines the pid with
+/// a process-local counter so two concurrent writers in the same process (e.g.
+/// loading two configs at once) never collide on the same temp path.
 fn write_store_atomic(path: &Path, map: &BTreeMap<String, u16>) -> Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let mut bytes = serde_json::to_vec_pretty(map)?;
     bytes.push(b'\n');
-    let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    let tmp = path.with_extension(format!(
+        "json.tmp.{}.{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::write(&tmp, &bytes).with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, path)
         .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
@@ -245,5 +253,61 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("duplicate entry: A_PORT"), "got: {err}");
+    }
+
+    /// Regression: many threads writing the same store concurrently must never
+    /// fail. With a temp name keyed only on the pid, the writers collided on a
+    /// single temp path and one's rename hit ENOENT after another consumed it.
+    #[test]
+    fn concurrent_writes_to_same_store_never_fail() {
+        let dir = tempdir();
+        let store = dir.join(STORE_FILE);
+        let mut handles = Vec::new();
+        for i in 0..32u16 {
+            let store = store.clone();
+            handles.push(std::thread::spawn(move || {
+                let mut map = BTreeMap::new();
+                map.insert(format!("PORT_{i}"), 1000 + i);
+                for _ in 0..50 {
+                    write_store_atomic(&store, &map)
+                        .expect("atomic write must not fail under concurrency");
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        // The surviving file is always complete, valid JSON (atomic rename).
+        assert!(!read_store(&store).is_empty());
+        // No temp files were leaked.
+        let leaked: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(leaked.is_empty(), "leaked temp files: {leaked:?}");
+    }
+
+    /// Regression mirroring the test-suite trigger: multiple configs resolving
+    /// the same dynamicPorts directory at once (as the fullstack example tests
+    /// do) must all succeed with complete, internally-consistent maps.
+    #[test]
+    fn concurrent_resolve_on_shared_dir_all_succeed() {
+        let dir = std::sync::Arc::new(tempdir());
+        let vars = names(&["A_PORT", "B_PORT", "C_PORT", "D_PORT"]);
+        let mut handles = Vec::new();
+        for _ in 0..16 {
+            let dir = std::sync::Arc::clone(&dir);
+            let vars = vars.clone();
+            handles.push(std::thread::spawn(move || {
+                let m = resolve_dynamic_ports(&vars, &dir)
+                    .expect("resolve must not fail under concurrency");
+                assert_eq!(m.len(), 4);
+                assert!(m.values().all(|v| v != "0"));
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
     }
 }
