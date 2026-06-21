@@ -80,6 +80,7 @@ async fn process_runs_under_pty_and_emits_output() {
         depends_on: vec![],
         long_lived: true,
         tags: vec![],
+        retry: None,
     };
 
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
@@ -130,6 +131,7 @@ async fn resize_replays_history_at_new_width() {
         depends_on: vec![],
         long_lived: true,
         tags: vec![],
+        retry: None,
     };
 
     let narrow = PtySize { rows: 10, cols: 40, pixel_width: 0, pixel_height: 0 };
@@ -193,6 +195,7 @@ async fn dep_with_exit_condition_gates_dependent_spawn() {
         depends_on: vec![],
         long_lived: false,
         tags: vec![],
+        retry: None,
     };
     // api: depends on migrate exit 0; just echo and exit
     let api = ProcessConfig {
@@ -210,6 +213,7 @@ async fn dep_with_exit_condition_gates_dependent_spawn() {
         }],
         long_lived: true,
         tags: vec![],
+        retry: None,
     };
 
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
@@ -266,6 +270,7 @@ async fn dep_with_log_condition_unblocks_dependent() {
         depends_on: vec![],
         long_lived: true,
         tags: vec![],
+        retry: None,
     };
     let client = ProcessConfig {
         name: "client".into(),
@@ -282,6 +287,7 @@ async fn dep_with_log_condition_unblocks_dependent() {
         }],
         long_lived: true,
         tags: vec![],
+        retry: None,
     };
 
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
@@ -323,6 +329,7 @@ async fn manager_kills_long_running_process_on_shutdown() {
         depends_on: vec![],
         long_lived: true,
         tags: vec![],
+        retry: None,
     };
 
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };

@@ -77,6 +77,27 @@ Top level: `{ "envFiles": [ ... ], "processes": [ ... ] }`, where each entry of
 | `dependsOn` | dependency[] | `[]` | Readiness gates that must pass before this process starts. |
 | `longLived` | bool | `true` | If `false`, a clean `exit 0` is shown as success (green) instead of a crash (red). Use for migrations and one-shot setup scripts. |
 | `tags` | string[] | `[]` | Labels for selecting a subset of processes with `-t`/`--tags`. Empty/whitespace entries are ignored. |
+| `retry` | object | *(none)* | Auto-restart policy on failure. Omit to disable (default: a process is spawned once and never auto-restarted). See [Retry object](#retry-object-retry). |
+
+### Retry object (`retry`)
+
+When present, rumor automatically restarts the process after a failed exit, up to `maxRetries` times, waiting a backoff delay between attempts. A `longLived` process that exits **at all** is a failure; a one-shot (`longLived: false`) is a failure only on a non-zero exit code or a signal. A user-initiated stop (`k` kill, `r` restart, or quit) never triggers a retry. The retry budget resets on a manual restart. Once the budget is exhausted, the tab shows `exited (...) (retries exhausted)`.
+
+| Field | Type | Default | Notes |
+| --- | --- | --- | --- |
+| `maxRetries` | u32 | *required* | Max auto-restart attempts after a failure. Must be `>= 1` (omit the `retry` block to disable). |
+| `strategy` | string | `"fixed"` | Backoff between attempts: `"fixed"` (`delayMs`), `"linear"` (`delayMs * attempt`), or `"exponential"` (`delayMs * 2^(attempt-1)`). |
+| `delayMs` | u64 | *required* | Base delay in milliseconds. Must be `>= 1`. |
+| `maxDelayMs` | u64 | *(uncapped)* | Optional cap on the computed delay. Must be `>= delayMs` when set. |
+
+```json
+{
+  "name": "api",
+  "command": "./bin/api",
+  "cwd": "./api",
+  "retry": { "maxRetries": 5, "strategy": "exponential", "delayMs": 500, "maxDelayMs": 30000 }
+}
+```
 
 ### Dependency object (`dependsOn[]`)
 
@@ -188,6 +209,8 @@ A realistic four-service topology that exercises rumor's more interesting featur
 - **`frontend`** (python static server) waits for `api`.
 
 It also demonstrates the layered env merge: a central `examples/fullstack/.env` declared **once** in the top-level `envFiles` and shared by every service, per-service `<svc>/.env.local`, and a JSON `env` block on one service that overrides both files. Every `.env.local` overrides something visible (db's password, redis's log level, api's log level, frontend's title). All four port numbers are `dynamicPorts` — allocated per checkout, persisted in `.rumor-ports.json`, and flowing into docker `-p` flags, listen ports, and `dependsOn.until.port` checks via `${VAR}` substitution.
+
+Each service also carries a `retry` policy, covering all three backoff strategies plus the `fixed` default: `db` retries with `exponential` backoff, `redis` with the default `fixed` (it omits `strategy`), `api` with `linear`, and `frontend` with `exponential`. If a container or server crashes, rumor restarts it up to `maxRetries` times before giving up.
 
 Run:
 

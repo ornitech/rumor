@@ -14,7 +14,8 @@
         "postgres:16-alpine"
       ],
       "cwd": "./db",
-      "envFiles": ["./db/.env.local"]
+      "envFiles": ["./db/.env.local"],
+      "retry": { "maxRetries": 5, "strategy": "exponential", "delayMs": 1000, "maxDelayMs": 30000 }
     },
     {
       "name": "redis",
@@ -26,7 +27,8 @@
         "redis-server", "--loglevel", "${REDIS_LOG_LEVEL}"
       ],
       "cwd": "./redis",
-      "envFiles": ["./redis/.env.local"]
+      "envFiles": ["./redis/.env.local"],
+      "retry": { "maxRetries": 3, "delayMs": 2000 }
     },
     {
       "name": "api",
@@ -38,7 +40,8 @@
       "dependsOn": [
         { "name": "db",    "until": { "port": "${POSTGRES_PORT}" } },
         { "name": "redis", "until": { "port": "${REDIS_PORT}" } }
-      ]
+      ],
+      "retry": { "maxRetries": 5, "strategy": "linear", "delayMs": 1000, "maxDelayMs": 10000 }
     },
     {
       "name": "frontend",
@@ -52,7 +55,8 @@
       "tags": ["frontend"],
       "dependsOn": [
         { "name": "api", "until": { "port": "${API_PORT}" } }
-      ]
+      ],
+      "retry": { "maxRetries": 3, "strategy": "exponential", "delayMs": 500, "maxDelayMs": 8000 }
     }
   ]
 }

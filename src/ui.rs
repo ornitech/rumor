@@ -382,7 +382,12 @@ fn slot_status_span(app: &App, idx: usize) -> Span<'static> {
             Status::Running => Span::styled("running", Style::default().fg(Color::Green)),
             Status::Exited(info) => {
                 let color = exited_color(info.code, info.signal.is_some(), p.long_lived);
-                Span::styled(format!("exited ({info})"), Style::default().fg(color))
+                let suffix = if app.mgr.retries_exhausted(idx) {
+                    " (retries exhausted)"
+                } else {
+                    ""
+                };
+                Span::styled(format!("exited ({info}){suffix}"), Style::default().fg(color))
             }
             Status::SpawnFailed(err) => Span::styled(
                 format!("spawn failed: {err}"),

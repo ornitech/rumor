@@ -50,6 +50,7 @@ fn cfg(name: &str, script: &str, cwd: PathBuf) -> ProcessConfig {
         depends_on: vec![],
         long_lived: true,
         tags: vec![],
+        retry: None,
     }
 }
 

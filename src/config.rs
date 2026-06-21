@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
@@ -22,6 +23,29 @@ pub enum ReadinessCondition {
 pub struct Dependency {
     pub name: String,
     pub until: ReadinessCondition,
+}
+
+/// Backoff strategy used between auto-restart attempts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackoffStrategy {
+    /// delay = base
+    Fixed,
+    /// delay = base * attempt (attempt is 1-based)
+    Linear,
+    /// delay = base * 2^(attempt-1)
+    Exponential,
+}
+
+/// Per-process auto-restart policy. Present only when a `retry` block is set.
+#[derive(Debug, Clone)]
+pub struct RetryConfig {
+    /// Max auto-restart attempts after a failure (>= 1).
+    pub max_retries: u32,
+    pub strategy: BackoffStrategy,
+    /// Base delay between attempts.
+    pub delay: Duration,
+    /// Optional cap on the computed delay. None = uncapped.
+    pub max_delay: Option<Duration>,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +72,8 @@ pub struct ProcessConfig {
     /// Free-form labels used to select a subset of processes via `--tags`.
     /// Trimmed; empty entries are dropped at load time.
     pub tags: Vec<String>,
+    /// Auto-restart policy on failure. None = no auto-restart (current behavior).
+    pub retry: Option<RetryConfig>,
 }
 
 fn default_long_lived() -> bool {
@@ -90,6 +116,31 @@ struct RawDependency {
     until: RawReadinessCondition,
 }
 
+#[derive(Debug, Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum RawBackoffStrategy {
+    Fixed,
+    Linear,
+    Exponential,
+}
+
+fn default_strategy() -> RawBackoffStrategy {
+    RawBackoffStrategy::Fixed
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRetryConfig {
+    #[serde(rename = "maxRetries")]
+    max_retries: u32,
+    #[serde(default = "default_strategy")]
+    strategy: RawBackoffStrategy,
+    #[serde(rename = "delayMs")]
+    delay_ms: u64,
+    #[serde(default, rename = "maxDelayMs")]
+    max_delay_ms: Option<u64>,
+}
+
 #[derive(Debug, Deserialize)]
 struct RawProcessConfig {
     name: String,
@@ -107,6 +158,8 @@ struct RawProcessConfig {
     long_lived: bool,
     #[serde(default)]
     tags: Vec<String>,
+    #[serde(default)]
+    retry: Option<RawRetryConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,6 +214,7 @@ impl Config {
                 depends_on,
                 long_lived,
                 tags,
+                retry,
             } = raw_proc;
 
             if name.trim().is_empty() {
@@ -172,6 +226,41 @@ impl Config {
             if command.trim().is_empty() {
                 return Err(anyhow!("process {}: command cannot be empty", name));
             }
+
+            let retry = match retry {
+                None => None,
+                Some(r) => {
+                    if r.max_retries == 0 {
+                        return Err(anyhow!(
+                            "process {}: retry.maxRetries must be >= 1 (omit the retry block to disable)",
+                            name
+                        ));
+                    }
+                    if r.delay_ms == 0 {
+                        return Err(anyhow!("process {}: retry.delayMs must be >= 1", name));
+                    }
+                    if let Some(cap) = r.max_delay_ms {
+                        if cap < r.delay_ms {
+                            return Err(anyhow!(
+                                "process {}: retry.maxDelayMs ({}) must be >= delayMs ({})",
+                                name,
+                                cap,
+                                r.delay_ms
+                            ));
+                        }
+                    }
+                    Some(RetryConfig {
+                        max_retries: r.max_retries,
+                        strategy: match r.strategy {
+                            RawBackoffStrategy::Fixed => BackoffStrategy::Fixed,
+                            RawBackoffStrategy::Linear => BackoffStrategy::Linear,
+                            RawBackoffStrategy::Exponential => BackoffStrategy::Exponential,
+                        },
+                        delay: Duration::from_millis(r.delay_ms),
+                        max_delay: r.max_delay_ms.map(Duration::from_millis),
+                    })
+                }
+            };
 
             if cwd.is_relative() {
                 cwd = config_dir.join(&cwd);
@@ -291,6 +380,7 @@ impl Config {
                     .map(|t| t.trim().to_string())
                     .filter(|t| !t.is_empty())
                     .collect(),
+                retry,
             });
         }
 
@@ -463,6 +553,7 @@ mod tests {
                 .collect(),
             long_lived: true,
             tags: tags.iter().map(|t| t.to_string()).collect(),
+            retry: None,
         }
     }
 
