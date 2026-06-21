@@ -184,6 +184,7 @@ async fn app_with_output(script: &str, rows: u16, cols: u16) -> App {
         depends_on: vec![],
         long_lived: false,
         tags: vec![],
+        retry: None,
     };
     let size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
     let mgr = ProcessManager::new(vec![cfg], size, None);

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -19,7 +19,7 @@ const RAW_CAP: usize = 1 << 20; // 1 MiB
 /// inherit this; the buffered raw bytes act as the source of truth.
 const SCROLLBACK: usize = 2000;
 
-use crate::config::ProcessConfig;
+use crate::config::{BackoffStrategy, ProcessConfig, RetryConfig};
 use crate::env;
 use crate::logfile::{AnsiLogWriter, TextExtractor};
 
@@ -619,6 +619,13 @@ struct ManagerInner {
     log_paths: Vec<Option<std::path::PathBuf>>,
     /// Raw-mode output tee, cloned into every (re)spawn. `None` in TUI mode.
     raw_sink: Option<RawSink>,
+    /// Per-slot flag set by kill/restart/shutdown to mark an upcoming
+    /// termination as intentional so the retry loop in `watch_slot` does NOT
+    /// auto-restart it. Reset to false by `start_internal` for each fresh watcher.
+    suppress_retry: Vec<AtomicBool>,
+    /// Per-slot flag set true by `watch_slot` right before it gives up after
+    /// exhausting the retry budget. Read by the UI to label the terminal state.
+    retries_exhausted: Vec<AtomicBool>,
 }
 
 const DIAG_CAP: usize = 200;
@@ -669,6 +676,8 @@ impl ProcessManager {
             Some(dir) => crate::logfile::assign_log_paths(&configs, dir),
             None => vec![None; configs.len()],
         };
+        let suppress_retry = (0..configs.len()).map(|_| AtomicBool::new(false)).collect();
+        let retries_exhausted = (0..configs.len()).map(|_| AtomicBool::new(false)).collect();
         let inner = Arc::new(ManagerInner {
             configs,
             slots,
@@ -678,6 +687,8 @@ impl ProcessManager {
             sizes,
             log_paths,
             raw_sink,
+            suppress_retry,
+            retries_exhausted,
         });
         let mgr = Self { inner };
         mgr.start_all();
@@ -732,6 +743,9 @@ impl ProcessManager {
         if let Some(h) = self.inner.watchers.lock().unwrap()[idx].take() {
             h.abort();
         }
+        // Fresh watcher = fresh retry budget and a clean suppress/exhausted state.
+        self.inner.suppress_retry[idx].store(false, Ordering::SeqCst);
+        self.inner.retries_exhausted[idx].store(false, Ordering::SeqCst);
         // Fresh watcher = fresh diagnostic log.
         self.inner.diagnostics[idx].lock().unwrap().clear();
         self.inner.slots[idx].send_replace(Slot::Waiting);
@@ -742,6 +756,9 @@ impl ProcessManager {
 
     pub fn restart(&self, idx: usize) {
         let old = if let Slot::Process(p) = self.slot(idx) {
+            // Mark the upcoming exit as intentional so the old watcher won't
+            // auto-retry in the window before start_internal aborts it.
+            self.inner.suppress_retry[idx].store(true, Ordering::SeqCst);
             p.terminate(Duration::from_secs(3));
             Some(p)
         } else {
@@ -752,8 +769,17 @@ impl ProcessManager {
 
     pub fn kill(&self, idx: usize) {
         if let Slot::Process(p) = self.slot(idx) {
+            // kill does NOT abort the watcher, so flag the exit as user-initiated
+            // to keep the retry loop from respawning it.
+            self.inner.suppress_retry[idx].store(true, Ordering::SeqCst);
             p.terminate(Duration::from_secs(3));
         }
+    }
+
+    /// True once `watch_slot` gave up after exhausting the retry budget. Used by
+    /// the UI to label the terminal exited state.
+    pub fn retries_exhausted(&self, idx: usize) -> bool {
+        self.inner.retries_exhausted[idx].load(Ordering::SeqCst)
     }
 
     pub fn restart_all(&self) {
@@ -780,6 +806,12 @@ impl ProcessManager {
     /// Abort all in-flight dependency watchers so none of them respawn a
     /// process while we're shutting down or restarting everything.
     fn abort_watchers(&self) {
+        // Mark every slot as intentionally terminated first (defense in depth:
+        // abort already stops the task, but this closes any window where a
+        // watcher observes an exit between SIGTERM and the abort landing).
+        for f in &self.inner.suppress_retry {
+            f.store(true, Ordering::SeqCst);
+        }
         for h in self.inner.watchers.lock().unwrap().iter_mut() {
             if let Some(h) = h.take() {
                 h.abort();
@@ -806,14 +838,21 @@ impl ProcessManager {
     }
 
     /// True when every slot has reached a terminal state on its own: each has
-    /// spawned and exited, or failed to spawn. A slot that is still Waiting,
-    /// Blocked, or running keeps this false. Unlike `all_exited`, this never
-    /// reports "done" before the watchers have actually spawned the processes,
-    /// so raw mode uses it to decide when a run-to-completion batch is finished
+    /// spawned and exited (with no retry pending), or failed to spawn. A slot
+    /// that is still Waiting, Blocked, or running keeps this false. Unlike
+    /// `all_exited`, this never reports "done" before the watchers have actually
+    /// spawned the processes, and it also stays false while a watcher is between
+    /// retries (the slot still holds the exited `Process` during backoff), so
+    /// raw mode uses it to decide when a run-to-completion batch is finished
     /// (long-lived servers keep it false, so rumor runs until a signal).
     pub fn all_finished(&self) -> bool {
+        let watchers = self.inner.watchers.lock().unwrap();
         (0..self.count()).all(|i| match self.slot(i) {
-            Slot::Process(p) => !p.is_running(),
+            // Exited only counts as finished once its watcher has returned —
+            // a live watcher means a retry may still be sleeping in backoff.
+            Slot::Process(p) => {
+                !p.is_running() && watchers[i].as_ref().map_or(true, |h| h.is_finished())
+            }
             Slot::SpawnFailed(_) => true,
             Slot::Waiting | Slot::Blocked(_) => false,
         })
@@ -1013,26 +1052,132 @@ async fn watch_slot(
             continue 'outer;
         }
 
-        // All deps cleared; spawn this process.
-        push_diag(&inner, idx, "all dependencies ready; spawning");
-        let size = *inner.sizes[idx].lock().unwrap();
-        match Process::spawn(
-            &cfg,
-            size,
-            inner.log_paths[idx].as_deref(),
-            inner.raw_sink.clone(),
-        ) {
-            Ok(p) => {
-                push_diag(&inner, idx, format!("spawned (pid {})", p.pid));
-                slot_tx.send_replace(Slot::Process(Arc::new(p)));
+        // All deps cleared; enter the spawn/monitor/retry loop. Dependencies are
+        // gated once above and are NOT re-checked between retries (a crash says
+        // nothing about a dep's health, and non-repeatable conditions like
+        // Exit(0) would deadlock on re-wait). `retries_used` is task-local, so a
+        // manual restart() spawns a fresh watch_slot with a fresh budget.
+        let mut retries_used: u32 = 0;
+        loop {
+            push_diag(&inner, idx, "all dependencies ready; spawning");
+            let size = *inner.sizes[idx].lock().unwrap();
+            let p = match Process::spawn(
+                &cfg,
+                size,
+                inner.log_paths[idx].as_deref(),
+                inner.raw_sink.clone(),
+            ) {
+                Ok(p) => Arc::new(p),
+                Err(e) => {
+                    push_diag(&inner, idx, format!("spawn failed: {e}"));
+                    slot_tx.send_replace(Slot::SpawnFailed(e.to_string()));
+                    return;
+                }
+            };
+            push_diag(&inner, idx, format!("spawned (pid {})", p.pid));
+            slot_tx.send_replace(Slot::Process(Arc::clone(&p)));
+
+            // No retry policy => preserve current behavior exactly: set slot, return.
+            let retry = match &cfg.retry {
+                Some(r) => r,
+                None => return,
+            };
+
+            // Mark this run as not-yet-user-terminated. kill/restart/shutdown set
+            // this true before/while terminating to suppress an auto-retry.
+            inner.suppress_retry[idx].store(false, Ordering::SeqCst);
+
+            // Block until the process exits (natural or via SIGTERM).
+            p.wait_for_exit().await;
+
+            // User-initiated termination is never retried.
+            if inner.suppress_retry[idx].load(Ordering::SeqCst) {
+                push_diag(&inner, idx, "process terminated by request; not retrying");
                 return;
             }
-            Err(e) => {
-                push_diag(&inner, idx, format!("spawn failed: {e}"));
-                slot_tx.send_replace(Slot::SpawnFailed(e.to_string()));
+
+            // Classify the exit. A long-lived service exiting at all is a failure;
+            // a one-shot only fails on a non-zero code or a signal.
+            let exit = p.status();
+            let is_failure = match &exit {
+                Status::Exited(info) => {
+                    cfg.long_lived || info.code != 0 || info.signal.is_some()
+                }
+                Status::SpawnFailed(_) => true,
+                // Starting/Running cannot occur after wait_for_exit returns.
+                _ => true,
+            };
+            if !is_failure {
+                push_diag(&inner, idx, "exited successfully; no retry needed");
+                return;
+            }
+
+            let exit_desc = describe_exit(&exit);
+            if retries_used >= retry.max_retries {
+                push_diag(
+                    &inner,
+                    idx,
+                    format!(
+                        "exited ({exit_desc}); retries exhausted ({}/{})",
+                        retries_used, retry.max_retries
+                    ),
+                );
+                inner.retries_exhausted[idx].store(true, Ordering::SeqCst);
+                // Leave Slot::Process(p) in place: preserves the exited status
+                // and the final run's scrollback for debugging.
+                return;
+            }
+
+            retries_used += 1;
+            let delay = backoff_delay(retry, retries_used);
+            push_diag(
+                &inner,
+                idx,
+                format!(
+                    "exited ({exit_desc}); retry {}/{} in {}ms",
+                    retries_used,
+                    retry.max_retries,
+                    delay.as_millis()
+                ),
+            );
+            tokio::time::sleep(delay).await;
+
+            // The user may have killed/quit during the backoff (kill doesn't abort
+            // the watcher, so we re-check here).
+            if inner.suppress_retry[idx].load(Ordering::SeqCst) {
+                push_diag(&inner, idx, "termination requested during backoff; not retrying");
                 return;
             }
         }
+    }
+}
+
+/// Format an exit status for diagnostics.
+fn describe_exit(status: &Status) -> String {
+    match status {
+        Status::Exited(info) => info.to_string(),
+        Status::SpawnFailed(e) => format!("spawn failed: {e}"),
+        Status::Starting => "starting".to_string(),
+        Status::Running => "running".to_string(),
+    }
+}
+
+/// Compute the backoff delay before retry attempt `attempt` (1-based). Saturating
+/// math keeps large bases/attempts from panicking.
+fn backoff_delay(cfg: &RetryConfig, attempt: u32) -> Duration {
+    let base = cfg.delay;
+    let raw = match cfg.strategy {
+        BackoffStrategy::Fixed => base,
+        BackoffStrategy::Linear => base.saturating_mul(attempt),
+        BackoffStrategy::Exponential => {
+            let shift = attempt.saturating_sub(1).min(31);
+            let factor = 1u32.checked_shl(shift).unwrap_or(u32::MAX);
+            base.saturating_mul(factor)
+        }
+    };
+    match cfg.max_delay {
+        Some(cap) => raw.min(cap),
+        None => raw,
     }
 }
 
@@ -1224,6 +1369,62 @@ async fn wait_for_exit_code(
         if rx.changed().await.is_err() {
             return Err(anyhow!("dep status channel closed"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(strategy: BackoffStrategy, delay_ms: u64, max_delay_ms: Option<u64>) -> RetryConfig {
+        RetryConfig {
+            max_retries: 10,
+            strategy,
+            delay: Duration::from_millis(delay_ms),
+            max_delay: max_delay_ms.map(Duration::from_millis),
+        }
+    }
+
+    #[test]
+    fn backoff_fixed_is_constant() {
+        let c = cfg(BackoffStrategy::Fixed, 500, None);
+        for attempt in 1..=5 {
+            assert_eq!(backoff_delay(&c, attempt), Duration::from_millis(500));
+        }
+    }
+
+    #[test]
+    fn backoff_linear_scales_with_attempt() {
+        let c = cfg(BackoffStrategy::Linear, 100, None);
+        assert_eq!(backoff_delay(&c, 1), Duration::from_millis(100));
+        assert_eq!(backoff_delay(&c, 2), Duration::from_millis(200));
+        assert_eq!(backoff_delay(&c, 3), Duration::from_millis(300));
+    }
+
+    #[test]
+    fn backoff_exponential_doubles() {
+        let c = cfg(BackoffStrategy::Exponential, 100, None);
+        assert_eq!(backoff_delay(&c, 1), Duration::from_millis(100));
+        assert_eq!(backoff_delay(&c, 2), Duration::from_millis(200));
+        assert_eq!(backoff_delay(&c, 3), Duration::from_millis(400));
+        assert_eq!(backoff_delay(&c, 4), Duration::from_millis(800));
+    }
+
+    #[test]
+    fn backoff_respects_max_delay_cap() {
+        let c = cfg(BackoffStrategy::Exponential, 1000, Some(3000));
+        assert_eq!(backoff_delay(&c, 1), Duration::from_millis(1000));
+        assert_eq!(backoff_delay(&c, 2), Duration::from_millis(2000));
+        assert_eq!(backoff_delay(&c, 3), Duration::from_millis(3000)); // 4000 capped
+        assert_eq!(backoff_delay(&c, 9), Duration::from_millis(3000));
+    }
+
+    #[test]
+    fn backoff_saturates_without_panic() {
+        let c = cfg(BackoffStrategy::Exponential, u64::MAX / 2, None);
+        // Large attempt + huge base must not panic.
+        let _ = backoff_delay(&c, 32);
+        let _ = backoff_delay(&c, u32::MAX);
     }
 }
 

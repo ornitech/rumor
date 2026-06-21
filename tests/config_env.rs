@@ -10,7 +10,7 @@ mod template;
 #[path = "../src/ports.rs"]
 mod ports;
 
-use config::{Config, ReadinessCondition};
+use config::{BackoffStrategy, Config, ReadinessCondition};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -89,6 +89,21 @@ fn loads_fullstack_example() {
     // The frontend service overrides LOG_LEVEL via the JSON env block — that's
     // the "one service also overrides a config-level env var" demonstration.
     assert_eq!(frontend.env.get("LOG_LEVEL").map(|s| s.as_str()), Some("warn"));
+
+    // Every service demonstrates a retry policy; the example exercises all three
+    // strategies plus the `fixed` default (redis omits `strategy`).
+    let db = loaded.config.processes.iter().find(|p| p.name == "db").unwrap();
+    let redis = loaded.config.processes.iter().find(|p| p.name == "redis").unwrap();
+    let db_retry = db.retry.as_ref().expect("db has retry");
+    assert_eq!(db_retry.strategy, BackoffStrategy::Exponential);
+    assert_eq!(db_retry.max_retries, 5);
+    assert_eq!(db_retry.max_delay, Some(std::time::Duration::from_millis(30000)));
+    let redis_retry = redis.retry.as_ref().expect("redis has retry");
+    assert_eq!(redis_retry.strategy, BackoffStrategy::Fixed); // default
+    assert_eq!(redis_retry.max_delay, None);
+    let api = loaded.config.processes.iter().find(|p| p.name == "api").unwrap();
+    assert_eq!(api.retry.as_ref().unwrap().strategy, BackoffStrategy::Linear);
+    assert_eq!(frontend.retry.as_ref().unwrap().strategy, BackoffStrategy::Exponential);
 }
 
 #[test]
@@ -873,6 +888,97 @@ fn no_dynamic_ports_leaves_no_store_file() {
     std::fs::write(&cfg, body).unwrap();
     Config::load(&cfg).expect("should load");
     assert!(!dir.join(".rumor-ports.json").exists());
+}
+
+// --- retry config ----------------------------------------------------------
+
+fn load_one_process(retry_json: &str) -> Result<config::Config, String> {
+    let dir = tempdir();
+    let cfg = dir.join("retry.json");
+    let retry_field = if retry_json.is_empty() {
+        String::new()
+    } else {
+        format!(", \"retry\": {retry_json}")
+    };
+    let body = format!(
+        r#"{{"processes": [
+            {{ "name": "a", "command": "echo", "cwd": "{0}"{1} }}
+        ]}}"#,
+        dir.display(),
+        retry_field
+    );
+    std::fs::write(&cfg, body).unwrap();
+    Config::load(&cfg)
+        .map(|l| l.config)
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[test]
+fn retry_absent_is_none() {
+    let config = load_one_process("").expect("should load");
+    assert!(config.processes[0].retry.is_none());
+}
+
+#[test]
+fn retry_minimal_defaults_to_fixed() {
+    let config = load_one_process(r#"{ "maxRetries": 3, "delayMs": 500 }"#).expect("should load");
+    let retry = config.processes[0].retry.as_ref().expect("retry set");
+    assert_eq!(retry.max_retries, 3);
+    assert_eq!(retry.strategy, BackoffStrategy::Fixed);
+    assert_eq!(retry.delay, std::time::Duration::from_millis(500));
+    assert_eq!(retry.max_delay, None);
+}
+
+#[test]
+fn retry_all_fields_parse() {
+    let config = load_one_process(
+        r#"{ "maxRetries": 5, "strategy": "exponential", "delayMs": 500, "maxDelayMs": 30000 }"#,
+    )
+    .expect("should load");
+    let retry = config.processes[0].retry.as_ref().expect("retry set");
+    assert_eq!(retry.max_retries, 5);
+    assert_eq!(retry.strategy, BackoffStrategy::Exponential);
+    assert_eq!(retry.delay, std::time::Duration::from_millis(500));
+    assert_eq!(retry.max_delay, Some(std::time::Duration::from_millis(30000)));
+
+    let config = load_one_process(r#"{ "maxRetries": 2, "strategy": "linear", "delayMs": 100 }"#)
+        .expect("should load");
+    assert_eq!(
+        config.processes[0].retry.as_ref().unwrap().strategy,
+        BackoffStrategy::Linear
+    );
+}
+
+#[test]
+fn retry_zero_max_retries_rejected() {
+    let err = load_one_process(r#"{ "maxRetries": 0, "delayMs": 100 }"#).unwrap_err();
+    assert!(err.contains("maxRetries must be >= 1"), "got: {err}");
+}
+
+#[test]
+fn retry_zero_delay_rejected() {
+    let err = load_one_process(r#"{ "maxRetries": 3, "delayMs": 0 }"#).unwrap_err();
+    assert!(err.contains("delayMs must be >= 1"), "got: {err}");
+}
+
+#[test]
+fn retry_max_delay_below_delay_rejected() {
+    let err =
+        load_one_process(r#"{ "maxRetries": 3, "delayMs": 1000, "maxDelayMs": 500 }"#).unwrap_err();
+    assert!(err.contains("must be >= delayMs"), "got: {err}");
+}
+
+#[test]
+fn retry_unknown_field_rejected() {
+    let err = load_one_process(r#"{ "maxRetries": 3, "delayMs": 100, "maxRetry": 5 }"#).unwrap_err();
+    assert!(err.contains("unknown field") || err.contains("maxRetry"), "got: {err}");
+}
+
+#[test]
+fn retry_bad_strategy_rejected() {
+    let err =
+        load_one_process(r#"{ "maxRetries": 3, "strategy": "fibonacci", "delayMs": 100 }"#).unwrap_err();
+    assert!(err.contains("fibonacci") || err.contains("unknown variant"), "got: {err}");
 }
 
 // ---------------------------------------------------------------------------
