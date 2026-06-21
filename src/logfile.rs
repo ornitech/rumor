@@ -128,14 +128,17 @@ fn newest_mtime(dir: &Path) -> Option<SystemTime> {
 /// Accumulates the printable text of a VT byte stream. CR handling: `\r\n`
 /// collapses to `\n`, and a lone `\r` (CR-overwrite progress bars) becomes
 /// `\n` so each frame lands on its own line instead of one mega-line.
+///
+/// Shared by `AnsiLogWriter` (session logs) and the raw-mode line emitter
+/// (`process.rs`) so both produce identical ANSI-stripped, CR-normalized text.
 #[derive(Default)]
-struct TextExtractor {
-    out: Vec<u8>,
+pub(crate) struct TextExtractor {
+    pub(crate) out: Vec<u8>,
     pending_cr: bool,
 }
 
 impl TextExtractor {
-    fn resolve_cr(&mut self) {
+    pub(crate) fn resolve_cr(&mut self) {
         if self.pending_cr {
             self.out.push(b'\n');
             self.pending_cr = false;
