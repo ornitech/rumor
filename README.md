@@ -20,6 +20,10 @@ rumor [config.json] [-t|--tags TAG ...] [--raw [--only NAME ...] [--color]]
 The config path is optional: with no argument, rumor loads `./rumor.json` from
 the current directory. Pass an explicit path to use any other config file.
 
+`rumor docs --agent` (or `-a`) prints a self-contained, machine-readable
+capability and config reference to stdout — meant for AI agents that drive rumor
+and author its config files. Bare `rumor docs` lists the available topics.
+
 ### Running a subset with tags
 
 Give processes `tags` in the config, then pass `-t`/`--tags` to run only the
