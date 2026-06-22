@@ -189,9 +189,65 @@ fn parse_args(args: &[String]) -> Option<CliArgs> {
     })
 }
 
+/// Print the `docs` subcommand index — the topics an agent/human can request.
+fn print_docs_index<W: Write>(out: &mut W) {
+    let _ = writeln!(out, "rumor docs - documentation topics");
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "  rumor docs --agent   full capability & config reference for AI agents (-a)"
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(out, "See README.md for the human-facing guide.");
+}
+
+/// Print CLI usage. Goes to stdout for `-h`/`--help`, to stderr on bad args.
+fn print_usage<W: Write>(out: &mut W) {
+    let _ = writeln!(out, "usage: rumor [config.json] [-t|--tags TAG ...] [--raw [--only NAME ...] [--color]]");
+    let _ = writeln!(out, "       rumor docs --agent");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "With no config argument, rumor loads ./rumor.json from the current directory.");
+    let _ = writeln!(out, "--tags runs only processes carrying any of the given tags, plus their dependencies.");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "--raw  streams all process output to a single stdout (no TUI), one line per");
+    let _ = writeln!(out, "       process prefixed with [name]. Intended for AI agents and piping.");
+    let _ = writeln!(out, "--only restricts which processes' output prints in raw mode (by name); every");
+    let _ = writeln!(out, "       process still runs. --color passes ANSI escapes through (default: strip).");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "AI agents: run `rumor docs --agent` for a full machine-readable reference on");
+    let _ = writeln!(out, "       driving rumor and authoring its config files.");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "Logs are written to {}/rumor/rumor.log",
+        dirs_data_local().map(|p| p.display().to_string()).unwrap_or_else(|| "<tmp>".into()));
+    let _ = writeln!(out, "Set RUMOR_LOG=debug to trace dependency readiness checks.");
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
+
+    // `-h`/`--help`: usage to stdout, exit 0 (before config loading).
+    if args[1..].iter().any(|a| a == "-h" || a == "--help") {
+        print_usage(&mut io::stdout());
+        return Ok(());
+    }
+
+    // `docs` subcommand: print bundled documentation and exit, before any config
+    // loading so it works with no rumor.json present.
+    if args.get(1).map(String::as_str) == Some("docs") {
+        let rest = &args[2..];
+        if rest.iter().any(|a| a == "--agent" || a == "-a") {
+            print!("{}", include_str!("../docs/AGENTS_GUIDE.md"));
+            return Ok(());
+        }
+        if rest.is_empty() {
+            print_docs_index(&mut io::stdout());
+            return Ok(());
+        }
+        print_docs_index(&mut io::stderr());
+        std::process::exit(2);
+    }
+
     let CliArgs {
         config_path,
         tags,
@@ -201,19 +257,7 @@ async fn main() -> Result<()> {
     } = match parse_args(&args) {
         Some(p) => p,
         None => {
-            eprintln!("usage: rumor [config.json] [-t|--tags TAG ...] [--raw [--only NAME ...] [--color]]");
-            eprintln!();
-            eprintln!("With no config argument, rumor loads ./rumor.json from the current directory.");
-            eprintln!("--tags runs only processes carrying any of the given tags, plus their dependencies.");
-            eprintln!();
-            eprintln!("--raw  streams all process output to a single stdout (no TUI), one line per");
-            eprintln!("       process prefixed with [name]. Intended for AI agents and piping.");
-            eprintln!("--only restricts which processes' output prints in raw mode (by name); every");
-            eprintln!("       process still runs. --color passes ANSI escapes through (default: strip).");
-            eprintln!();
-            eprintln!("Logs are written to {}/rumor/rumor.log",
-                dirs_data_local().map(|p| p.display().to_string()).unwrap_or_else(|| "<tmp>".into()));
-            eprintln!("Set RUMOR_LOG=debug to trace dependency readiness checks.");
+            print_usage(&mut io::stderr());
             std::process::exit(2);
         }
     };
