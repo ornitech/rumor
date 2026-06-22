@@ -21,7 +21,24 @@ const SCROLLBACK: usize = 2000;
 
 use crate::config::{BackoffStrategy, ProcessConfig, RetryConfig};
 use crate::env;
-use crate::logfile::AnsiLogWriter;
+use crate::logfile::{AnsiLogWriter, TextExtractor};
+
+/// One completed logical output line from a process, destined for raw mode's
+/// single combined stdout stream. `line` carries no trailing newline.
+pub struct RawLine {
+    pub name: String,
+    pub line: Vec<u8>,
+}
+
+/// Optional tee installed in raw (`--raw`) mode: every process's read task
+/// funnels completed lines through this channel to one printer task. `strip`
+/// controls ANSI handling (true = strip for clean agent-readable text, false =
+/// `--color` passthrough). `None` in TUI mode, where it is never constructed.
+#[derive(Clone)]
+pub struct RawSink {
+    pub tx: mpsc::UnboundedSender<RawLine>,
+    pub strip: bool,
+}
 
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -75,7 +92,12 @@ pub struct Process {
 }
 
 impl Process {
-    pub fn spawn(cfg: &ProcessConfig, size: PtySize, log_path: Option<&std::path::Path>) -> Result<Self> {
+    pub fn spawn(
+        cfg: &ProcessConfig,
+        size: PtySize,
+        log_path: Option<&std::path::Path>,
+        raw_sink: Option<RawSink>,
+    ) -> Result<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(size)
@@ -174,6 +196,7 @@ impl Process {
             Arc::clone(&bytes_seen),
             cfg.name.clone(),
             log_writer,
+            raw_sink,
         );
         let (writer_tx, writer_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let write_task = spawn_write_task(writer, writer_rx, cfg.name.clone());
@@ -309,7 +332,9 @@ fn spawn_read_task(
     bytes_seen: Arc<AtomicU64>,
     name: String,
     mut log: Option<AnsiLogWriter>,
+    raw_sink: Option<RawSink>,
 ) -> JoinHandle<()> {
+    let mut emitter = raw_sink.map(|s| RawEmitter::new(name.clone(), s));
     tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 8192];
         loop {
@@ -334,6 +359,10 @@ fn spawn_read_task(
                     if let Some(l) = log.as_mut() {
                         l.write_chunk(&buf[..n]);
                     }
+                    // Raw-mode line tee: also thread-local, no locks.
+                    if let Some(e) = emitter.as_mut() {
+                        e.feed(&buf[..n]);
+                    }
                 }
                 Err(e) => {
                     debug!(name = %name, error = %e, "pty reader error");
@@ -344,7 +373,128 @@ fn spawn_read_task(
         if let Some(mut l) = log.take() {
             l.flush();
         }
+        if let Some(mut e) = emitter.take() {
+            e.finish();
+        }
     })
+}
+
+/// Splits a process's PTY byte stream into completed lines for raw mode and
+/// sends each through the shared `RawSink` channel. Stateful (escape sequences
+/// and CR runs can straddle chunk boundaries); lives on the read thread only.
+struct RawEmitter {
+    name: String,
+    tx: mpsc::UnboundedSender<RawLine>,
+    /// Bytes buffered up to the next newline. Drained one line at a time.
+    acc: Vec<u8>,
+    mode: EmitMode,
+}
+
+enum EmitMode {
+    /// `--color`: pass bytes through, only normalizing CR to line breaks.
+    Color { pending_cr: bool },
+    /// Default: strip ANSI via the shared vte-based extractor. Boxed because
+    /// `vt100`'s parser dwarfs the `Color` variant.
+    Strip(Box<StripState>),
+}
+
+struct StripState {
+    parser: vte::Parser,
+    extractor: TextExtractor,
+}
+
+impl RawEmitter {
+    fn new(name: String, sink: RawSink) -> Self {
+        let mode = if sink.strip {
+            EmitMode::Strip(Box::new(StripState {
+                parser: vte::Parser::new(),
+                extractor: TextExtractor::default(),
+            }))
+        } else {
+            EmitMode::Color { pending_cr: false }
+        };
+        Self {
+            name,
+            tx: sink.tx,
+            acc: Vec::new(),
+            mode,
+        }
+    }
+
+    fn feed(&mut self, bytes: &[u8]) {
+        match &mut self.mode {
+            EmitMode::Strip(s) => {
+                s.parser.advance(&mut s.extractor, bytes);
+                self.acc.append(&mut s.extractor.out);
+            }
+            EmitMode::Color { pending_cr } => {
+                normalize_cr(bytes, pending_cr, &mut self.acc);
+            }
+        }
+        self.emit_lines();
+    }
+
+    /// Flush at EOF: resolve a dangling CR, emit complete lines, then send any
+    /// final partial line so output without a trailing newline still prints.
+    fn finish(&mut self) {
+        match &mut self.mode {
+            EmitMode::Strip(s) => {
+                s.extractor.resolve_cr();
+                self.acc.append(&mut s.extractor.out);
+            }
+            EmitMode::Color { pending_cr } => {
+                if *pending_cr {
+                    self.acc.push(b'\n');
+                    *pending_cr = false;
+                }
+            }
+        }
+        self.emit_lines();
+        if !self.acc.is_empty() {
+            let line = std::mem::take(&mut self.acc);
+            let _ = self.tx.send(RawLine {
+                name: self.name.clone(),
+                line,
+            });
+        }
+    }
+
+    fn emit_lines(&mut self) {
+        while let Some(pos) = self.acc.iter().position(|&b| b == b'\n') {
+            let mut line: Vec<u8> = self.acc.drain(..=pos).collect();
+            line.pop(); // drop the trailing '\n'
+            let _ = self.tx.send(RawLine {
+                name: self.name.clone(),
+                line,
+            });
+        }
+    }
+}
+
+/// Color-mode CR normalization mirroring `TextExtractor` but preserving every
+/// non-CR byte (including ANSI escapes): `\r\n` -> `\n`, lone `\r` -> `\n`.
+fn normalize_cr(bytes: &[u8], pending_cr: &mut bool, acc: &mut Vec<u8>) {
+    for &b in bytes {
+        match b {
+            b'\n' => {
+                *pending_cr = false;
+                acc.push(b'\n');
+            }
+            b'\r' => {
+                if *pending_cr {
+                    acc.push(b'\n');
+                }
+                *pending_cr = true;
+            }
+            _ => {
+                if *pending_cr {
+                    acc.push(b'\n');
+                    *pending_cr = false;
+                }
+                acc.push(b);
+            }
+        }
+    }
 }
 
 /// Trim a VecDeque<u8> down to `cap`, dropping at '\n' boundaries so we
@@ -467,6 +617,8 @@ struct ManagerInner {
     /// reuse the same path, which is what gives restart-append semantics.
     /// All None when session log capture is disabled.
     log_paths: Vec<Option<std::path::PathBuf>>,
+    /// Raw-mode output tee, cloned into every (re)spawn. `None` in TUI mode.
+    raw_sink: Option<RawSink>,
     /// Per-slot flag set by kill/restart/shutdown to mark an upcoming
     /// termination as intentional so the retry loop in `watch_slot` does NOT
     /// auto-restart it. Reset to false by `start_internal` for each fresh watcher.
@@ -483,6 +635,26 @@ impl ProcessManager {
         configs: Vec<ProcessConfig>,
         size: PtySize,
         session_dir: Option<std::path::PathBuf>,
+    ) -> Self {
+        Self::build(configs, size, session_dir, None)
+    }
+
+    /// Like `new`, but installs a raw-mode output sink so every process tees its
+    /// completed output lines to the shared combined stdout stream.
+    pub fn new_raw(
+        configs: Vec<ProcessConfig>,
+        size: PtySize,
+        session_dir: Option<std::path::PathBuf>,
+        raw_sink: RawSink,
+    ) -> Self {
+        Self::build(configs, size, session_dir, Some(raw_sink))
+    }
+
+    fn build(
+        configs: Vec<ProcessConfig>,
+        size: PtySize,
+        session_dir: Option<std::path::PathBuf>,
+        raw_sink: Option<RawSink>,
     ) -> Self {
         let name_to_idx = configs
             .iter()
@@ -514,6 +686,7 @@ impl ProcessManager {
             name_to_idx,
             sizes,
             log_paths,
+            raw_sink,
             suppress_retry,
             retries_exhausted,
         });
@@ -654,11 +827,34 @@ impl ProcessManager {
         self.kill_all();
     }
 
-    /// True when no slot holds a still-running process.
+    /// True when no slot holds a still-running process. Treats Waiting / Blocked
+    /// slots as "exited" — correct only after `begin_shutdown` has aborted the
+    /// watchers so nothing more will spawn. Used to poll shutdown progress.
     pub fn all_exited(&self) -> bool {
         (0..self.count()).all(|i| match self.slot(i) {
             Slot::Process(p) => !p.is_running(),
             _ => true,
+        })
+    }
+
+    /// True when every slot has reached a terminal state on its own: each has
+    /// spawned and exited (with no retry pending), or failed to spawn. A slot
+    /// that is still Waiting, Blocked, or running keeps this false. Unlike
+    /// `all_exited`, this never reports "done" before the watchers have actually
+    /// spawned the processes, and it also stays false while a watcher is between
+    /// retries (the slot still holds the exited `Process` during backoff), so
+    /// raw mode uses it to decide when a run-to-completion batch is finished
+    /// (long-lived servers keep it false, so rumor runs until a signal).
+    pub fn all_finished(&self) -> bool {
+        let watchers = self.inner.watchers.lock().unwrap();
+        (0..self.count()).all(|i| match self.slot(i) {
+            // Exited only counts as finished once its watcher has returned —
+            // a live watcher means a retry may still be sleeping in backoff.
+            Slot::Process(p) => {
+                !p.is_running() && watchers[i].as_ref().map_or(true, |h| h.is_finished())
+            }
+            Slot::SpawnFailed(_) => true,
+            Slot::Waiting | Slot::Blocked(_) => false,
         })
     }
 
@@ -865,7 +1061,12 @@ async fn watch_slot(
         loop {
             push_diag(&inner, idx, "all dependencies ready; spawning");
             let size = *inner.sizes[idx].lock().unwrap();
-            let p = match Process::spawn(&cfg, size, inner.log_paths[idx].as_deref()) {
+            let p = match Process::spawn(
+                &cfg,
+                size,
+                inner.log_paths[idx].as_deref(),
+                inner.raw_sink.clone(),
+            ) {
                 Ok(p) => Arc::new(p),
                 Err(e) => {
                     push_diag(&inner, idx, format!("spawn failed: {e}"));

@@ -14,7 +14,7 @@ brew install rumor
 ## Usage
 
 ```bash
-rumor [config.json] [-t|--tags TAG ...]
+rumor [config.json] [-t|--tags TAG ...] [--raw [--only NAME ...] [--color]]
 ```
 
 The config path is optional: with no argument, rumor loads `./rumor.json` from
@@ -37,6 +37,37 @@ of selected processes are pulled in automatically (transitively), so a tagged
 service never hangs waiting on an untagged `dependsOn` target. If no process
 matches, rumor exits with an error. A positional config path must come before
 the first `-t`.
+
+### Raw mode (for AI agents and piping)
+
+The default UI is an interactive TUI. Pass `--raw` to skip it and stream every
+process's output to a single stdout instead, one line at a time prefixed with
+the process name:
+
+```bash
+rumor --raw
+[migration] running migration...
+[counter] counter 0
+[ticker] tick 20:52:16
+[counter] counter 1
+```
+
+This is meant for non-interactive use: an AI agent or a shell pipe that just
+wants a plain combined log. ANSI escape codes are stripped by default (they
+waste tokens and break naive line parsers); pass `--color` to keep them.
+
+`--only` narrows which processes' output prints, by name. Everything still runs
+(including dependencies) — only the printed stream is filtered:
+
+```bash
+rumor --raw --only backend,worker   # run all, print only backend + worker
+```
+
+rumor runs until you press Ctrl+C (or it receives SIGTERM), then SIGTERMs every
+child and exits. If every process is run-to-completion (`longLived: false`),
+rumor exits on its own once they have all finished. `--tags` still selects the
+run-set; `--only` is a finer print filter layered on top. Per-process session
+logs are written exactly as in TUI mode. `--only` and `--color` require `--raw`.
 
 A minimal config:
 
