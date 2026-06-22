@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.0](https://github.com/ornitech/rumor/compare/v0.9.0...v0.10.0) (2026-06-22)
+
+
+### Features
+
+* configurable per-process retry/auto-restart ([#26](https://github.com/ornitech/rumor/issues/26)) ([e388578](https://github.com/ornitech/rumor/commit/e388578445855686cd836ce8c48d34acfb407261))
+* **docs:** add 'rumor docs --agent' reference and --help flag ([#29](https://github.com/ornitech/rumor/issues/29)) ([3c0d4d8](https://github.com/ornitech/rumor/commit/3c0d4d8ca49e1f4b4ea67df0df888a7c39893d8a))
+* **raw:** add single-stream output mode for AI agents ([#28](https://github.com/ornitech/rumor/issues/28)) ([8459379](https://github.com/ornitech/rumor/commit/84593799d03310e988bc47566c2873575dd8a8af))
+
 ## [0.9.0](https://github.com/ornitech/rumor/compare/v0.8.0...v0.9.0) (2026-06-10)
 
 
