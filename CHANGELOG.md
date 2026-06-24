@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0](https://github.com/ornitech/rumor/compare/v0.10.0...v0.11.0) (2026-06-24)
+
+
+### Features
+
+* **tui:** add 'c' hotkey to clear a process log view ([#33](https://github.com/ornitech/rumor/issues/33)) ([32120b8](https://github.com/ornitech/rumor/commit/32120b8e4dd0f468c40920906098b991615c077b))
+
+
+### Bug Fixes
+
+* **tui:** correct tab status dot colors ([#30](https://github.com/ornitech/rumor/issues/30), [#31](https://github.com/ornitech/rumor/issues/31)) ([2445e73](https://github.com/ornitech/rumor/commit/2445e73b815f41539d8f83da40064325cfd9fe6e))
+
 ## [0.10.0](https://github.com/ornitech/rumor/compare/v0.9.0...v0.10.0) (2026-06-22)
 
 
