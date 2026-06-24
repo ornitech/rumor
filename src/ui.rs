@@ -282,7 +282,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     );
 
     let hints = match app.mode {
-        Mode::Nav => "  ←/→ tabs · ↑/↓ scroll · Enter focus · / search · r restart · k kill · w wrap · y log path · d details · ^R/^K all · h help · q quit",
+        Mode::Nav => "  ←/→ tabs · ↑/↓ scroll · Enter focus · / search · r restart · k kill · c clear · w wrap · y log path · d details · ^R/^K all · h help · q quit",
         Mode::Focus => "  Esc leave focus · all other keys go to the process",
         Mode::Details => "  ↑/↓ scroll · PgUp/PgDn ×10 · Home top · / search · y copy log path · d/Esc close · h help",
     };
@@ -645,6 +645,7 @@ fn draw_help(frame: &mut Frame, app: &mut App, area: Rect) {
     lines.push(entry("/", "search output (see Search below)"));
     lines.push(entry("r / ^R", "restart process / all"));
     lines.push(entry("k / ^K", "kill process / all"));
+    lines.push(entry("c", "clear log view (display only)"));
     lines.push(entry("w", "toggle line wrap"));
     lines.push(entry("y", "copy log path"));
     lines.push(entry("d", "process details"));
