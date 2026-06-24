@@ -1,6 +1,6 @@
 [package]
 name = "rumor"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 description = "Multi-process TUI orchestrator"
 license = "MIT"
