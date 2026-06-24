@@ -1,0 +1,7 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+# Remove Docker containers/networks started from this workspace when it is archived.
+# Targets $CONDUCTOR_WORKSPACE_PATH via the Compose working_dir label. See the script
+# header for flags (--dry-run, --volumes).
+archive = "scripts/cleanup-docker.sh"
