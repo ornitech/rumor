@@ -10,7 +10,7 @@ use tui_term::widget::PseudoTerminal;
 use crate::app::{App, Mode};
 use crate::process::{Slot, Status};
 use crate::search;
-use crate::status_color::exited_color;
+use crate::status_color::{exited_color, PENDING};
 
 /// Style for the search match the cursor is on.
 const MATCH_CURRENT: Style = Style::new().fg(Color::Black).bg(Color::Yellow);
@@ -70,35 +70,41 @@ fn draw_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
     app.ensure_selected_visible(tabs_area.width);
     let (start, end) = app.visible_tab_range(tabs_area.width);
 
+    // Highlight only the name of the selected tab, not its status dot. The dot keeps
+    // its true status color on a normal background so it stays readable (#31) and does
+    // not lose contrast against the bright highlight (e.g. green-on-cyan).
+    let highlight_bg = if app.mode == Mode::Focus {
+        Color::Yellow
+    } else {
+        Color::Cyan
+    };
     let titles: Vec<Line> = app.mgr.configs()[start..end]
         .iter()
         .enumerate()
         .map(|(offset, cfg)| {
             let i = start + offset;
             let dot_style = Style::default().fg(tab_dot_color(app, i));
-            Line::from(vec![
-                Span::styled("● ", dot_style),
-                Span::raw(cfg.name.clone()),
-            ])
+            let name = if i == app.selected {
+                Span::styled(
+                    cfg.name.clone(),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(highlight_bg)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::raw(cfg.name.clone())
+            };
+            Line::from(vec![Span::styled("● ", dot_style), name])
         })
         .collect();
 
-    let highlight = if app.mode == Mode::Focus {
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Yellow)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    };
-
     let selected_local = app.selected.saturating_sub(start);
+    // All selected styling lives on the spans above; neutralize the widget's default
+    // reversed highlight so it does not repaint (and clobber) the dot.
     let tabs = Tabs::new(titles)
         .select(selected_local)
-        .highlight_style(highlight)
+        .highlight_style(Style::default())
         .divider("│");
     frame.render_widget(tabs, tabs_area);
 
@@ -354,11 +360,11 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 
 fn tab_dot_color(app: &App, idx: usize) -> Color {
     match app.mgr.slot(idx) {
-        Slot::Waiting => Color::Yellow,
+        Slot::Waiting => PENDING,
         Slot::Blocked(_) => Color::Magenta,
         Slot::SpawnFailed(_) => Color::Red,
         Slot::Process(p) => match p.status() {
-            Status::Starting => Color::Yellow,
+            Status::Starting => PENDING,
             Status::Running => Color::Green,
             Status::Exited(info) => {
                 exited_color(info.code, info.signal.is_some(), p.long_lived)
@@ -370,7 +376,7 @@ fn tab_dot_color(app: &App, idx: usize) -> Color {
 
 fn slot_status_span(app: &App, idx: usize) -> Span<'static> {
     match app.mgr.slot(idx) {
-        Slot::Waiting => Span::styled("waiting", Style::default().fg(Color::Yellow)),
+        Slot::Waiting => Span::styled("waiting", Style::default().fg(PENDING)),
         Slot::Blocked(reason) => {
             Span::styled(format!("blocked: {reason}"), Style::default().fg(Color::Magenta))
         }
@@ -378,7 +384,7 @@ fn slot_status_span(app: &App, idx: usize) -> Span<'static> {
             Span::styled(format!("spawn failed: {err}"), Style::default().fg(Color::Red))
         }
         Slot::Process(p) => match p.status() {
-            Status::Starting => Span::styled("starting", Style::default().fg(Color::Yellow)),
+            Status::Starting => Span::styled("starting", Style::default().fg(PENDING)),
             Status::Running => Span::styled("running", Style::default().fg(Color::Green)),
             Status::Exited(info) => {
                 let color = exited_color(info.code, info.signal.is_some(), p.long_lived);
