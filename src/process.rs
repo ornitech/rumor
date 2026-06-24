@@ -253,6 +253,18 @@ impl Process {
         }
     }
 
+    /// Clear the in-memory display: reset the parser to a blank screen and drop
+    /// the raw replay history so a later resize can't bring the old output back.
+    /// Does NOT touch the on-disk session log; new output continues to append.
+    pub fn clear_display(&self) {
+        // Lock order: raw before parser (matches the read task and resize).
+        let mut r = self.raw.lock().unwrap();
+        r.clear();
+        let mut parser_guard = self.parser.lock().unwrap();
+        let (rows, cols) = parser_guard.screen().size();
+        *parser_guard = vt100::Parser::new(rows, cols, SCROLLBACK);
+    }
+
     pub fn resize(&self, size: PtySize) {
         if let Err(e) = self.master.lock().unwrap().resize(size) {
             warn!(name = %self.name, error = %e, "pty resize failed");

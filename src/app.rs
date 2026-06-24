@@ -242,6 +242,7 @@ impl App {
                 self.mgr.restart_all();
             }
             KeyCode::Char('k') if ctrl => self.mgr.kill_all(),
+            KeyCode::Char('c') if !ctrl => self.clear_log_display(),
             KeyCode::Char('w') if !ctrl => self.toggle_wrap(),
             KeyCode::Char('y') if !ctrl => self.copy_log_path(),
             KeyCode::Char('h') if !ctrl => self.open_help(),
@@ -479,6 +480,18 @@ impl App {
             *w = !*w;
         }
         self.resize_one(self.selected);
+    }
+
+    /// Clear the selected process's log view (display only; the on-disk session
+    /// log is untouched). New output continues to stream in afterward.
+    fn clear_log_display(&mut self) {
+        if let Some(p) = self.mgr.process(self.selected) {
+            p.clear_display();
+            self.log_search.clear();
+            self.notice = Some(("log view cleared".to_string(), Instant::now()));
+        } else {
+            self.notice = Some(("nothing to clear".to_string(), Instant::now()));
+        }
     }
 
     fn scroll_by(&mut self, delta: i32) {

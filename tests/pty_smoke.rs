@@ -45,6 +45,36 @@ async fn wait_for_process(mgr: &ProcessManager, idx: usize) -> Arc<Process> {
     }
 }
 
+/// Poll the process's vt100 screen until `pred` holds on its visible contents.
+async fn wait_for_parser(proc: &Arc<Process>, pred: impl Fn(&str) -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let contents = proc.parser.lock().unwrap().screen().contents();
+        if pred(&contents) {
+            return;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("parser never satisfied predicate; contents:\n{contents}");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Poll a file until `pred` holds on its contents (file writes lag the PTY).
+async fn wait_for_file(path: &PathBuf, pred: impl Fn(&str) -> bool) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let contents = std::fs::read_to_string(path).unwrap_or_default();
+        if pred(&contents) {
+            return contents;
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("file {} never satisfied predicate; contents:\n{contents}", path.display());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 fn tmpdir() -> PathBuf {
     let p = std::env::temp_dir().join(format!(
         "rumor-pty-{}-{}",
@@ -104,6 +134,86 @@ async fn process_runs_under_pty_and_emits_output() {
     match proc.status() {
         Status::Exited(info) => assert_eq!(info.code, 0, "non-zero exit: {info}"),
         other => panic!("expected Exited, got {other:?}"),
+    }
+
+    mgr.shutdown(Duration::from_secs(2)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn clear_display_wipes_view_keeps_file_and_shows_new_output() {
+    let dir = tmpdir();
+    let session = dir.join("session");
+    std::fs::create_dir_all(&session).unwrap();
+
+    // A long-lived process that echoes each stdin line, so we can drive output
+    // before and after the clear.
+    let cfg = ProcessConfig {
+        name: "echoer".into(),
+        command: "bash".into(),
+        args: vec![
+            "-c".into(),
+            "while IFS= read -r line; do echo \"got $line\"; done".into(),
+        ],
+        cwd: dir.clone(),
+        env_files: vec![],
+        global_env_files: vec![],
+        env: HashMap::new(),
+        dynamic_ports: HashMap::new(),
+        depends_on: vec![],
+        long_lived: true,
+        tags: vec![],
+        retry: None,
+    };
+
+    let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
+    let mgr = ProcessManager::new(vec![cfg], size, Some(session.clone()));
+    let proc = wait_for_process(&mgr, 0).await;
+
+    // Emit a line and wait for both the display and the on-disk log to show it.
+    proc.write_input(b"before-clear\n");
+    wait_for_parser(&proc, |s| s.contains("got before-clear")).await;
+    let log = session.join("echoer.log");
+    wait_for_file(&log, |s| s.contains("got before-clear")).await;
+
+    // Clear the in-memory view.
+    proc.clear_display();
+
+    // The pre-clear output is gone from the display.
+    {
+        let contents = proc.parser.lock().unwrap().screen().contents();
+        assert!(
+            !contents.contains("before-clear"),
+            "cleared display should not contain pre-clear output, got:\n{contents}"
+        );
+    }
+
+    // ...but the on-disk session log still has it (display-only clear).
+    let file_after = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        file_after.contains("got before-clear"),
+        "log file must retain pre-clear output after a display clear, got:\n{file_after}"
+    );
+
+    // A resize replays raw history into a fresh parser; the cleared output must
+    // not come back (clear drops the raw buffer, not just the screen).
+    proc.resize(PtySize { rows: 24, cols: 120, pixel_width: 0, pixel_height: 0 });
+    {
+        let contents = proc.parser.lock().unwrap().screen().contents();
+        assert!(
+            !contents.contains("before-clear"),
+            "pre-clear output must not reappear after resize, got:\n{contents}"
+        );
+    }
+
+    // New output after the clear is displayed.
+    proc.write_input(b"after-clear\n");
+    wait_for_parser(&proc, |s| s.contains("got after-clear")).await;
+    {
+        let contents = proc.parser.lock().unwrap().screen().contents();
+        assert!(
+            !contents.contains("before-clear"),
+            "pre-clear output must stay gone once new output arrives, got:\n{contents}"
+        );
     }
 
     mgr.shutdown(Duration::from_secs(2)).await;
