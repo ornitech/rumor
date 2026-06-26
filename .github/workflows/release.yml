@@ -55,6 +55,7 @@ jobs:
           ARTIFACT="rumor-${{ matrix.target }}.tar.gz"
           tar -czf "$ARTIFACT" -C "target/${{ matrix.target }}/release" rumor
           SHA256=$(shasum -a 256 "$ARTIFACT" | awk '{print $1}')
+          printf '%s  %s\n' "$SHA256" "$ARTIFACT" > "$ARTIFACT.sha256"
           echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
           echo "Built $ARTIFACT (sha256=$SHA256)"
@@ -77,7 +78,7 @@ jobs:
       - name: Upload artifact to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ steps.version.outputs.tag }}" "${{ steps.pkg.outputs.artifact }}" --clobber
+        run: gh release upload "${{ steps.version.outputs.tag }}" "${{ steps.pkg.outputs.artifact }}" "${{ steps.pkg.outputs.artifact }}.sha256" --clobber
 
       - name: Record sha256 for downstream job
         run: |
