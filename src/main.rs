@@ -209,6 +209,7 @@ fn print_docs_index<W: Write>(out: &mut W) {
 fn print_usage<W: Write>(out: &mut W) {
     let _ = writeln!(out, "usage: rumor [config.json] [-t|--tags TAG ...] [--raw [--only NAME ...] [--color]]");
     let _ = writeln!(out, "       rumor docs --agent");
+    let _ = writeln!(out, "       rumor -v|--version");
     let _ = writeln!(out);
     let _ = writeln!(out, "With no config argument, rumor loads ./rumor.json from the current directory.");
     let _ = writeln!(out, "--tags runs only processes carrying any of the given tags, plus their dependencies.");
@@ -233,6 +234,12 @@ async fn main() -> Result<()> {
     // `-h`/`--help`: usage to stdout, exit 0 (before config loading).
     if args[1..].iter().any(|a| a == "-h" || a == "--help") {
         print_usage(&mut io::stdout());
+        return Ok(());
+    }
+
+    // `-v`/`--version`: print version to stdout, exit 0 (before config loading).
+    if args[1..].iter().any(|a| a == "-v" || a == "--version") {
+        println!("rumor {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 

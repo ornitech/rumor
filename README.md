@@ -7,9 +7,18 @@ Multi-process TUI orchestrator. Run a JSON-configured set of long-lived processe
 ## Install
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/ornitech/rumor/main/install.sh | sh
+```
+
+Or via Homebrew:
+
+```bash
 brew tap ornitech/tap
 brew install rumor
 ```
+
+macOS only. Override the install dir with `RUMOR_INSTALL_DIR`, or pin a version with
+`RUMOR_VERSION=v0.11.0`.
 
 ## Usage
 
