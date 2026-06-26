@@ -31,6 +31,15 @@ pub enum Mode {
     Details,
 }
 
+/// A newer version found by the background update check, plus how to install it.
+#[derive(Debug, Clone)]
+pub struct UpdateInfo {
+    /// The newer version, without a leading `v` (e.g. "0.12.0").
+    pub latest: String,
+    /// How to install it, e.g. "brew upgrade rumor".
+    pub action: String,
+}
+
 pub struct App {
     pub mgr: ProcessManager,
     pub selected: usize,
@@ -56,6 +65,8 @@ pub struct App {
     pub log_search: LogSearch,
     /// Search over the details pane (Details mode).
     pub details_search: DetailsSearch,
+    /// Set by the background update check when a newer version is available.
+    pub update_available: Option<UpdateInfo>,
 }
 
 impl App {
@@ -78,6 +89,7 @@ impl App {
             notice: None,
             log_search: LogSearch::default(),
             details_search: DetailsSearch::default(),
+            update_available: None,
         }
     }
 

@@ -8,6 +8,9 @@ use ratatui::Frame;
 use tui_term::widget::PseudoTerminal;
 
 use crate::app::{App, Mode};
+
+/// Running version, sourced from Cargo.toml at compile time.
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 use crate::process::{Slot, Status};
 use crate::search;
 use crate::status_color::{exited_color, PENDING};
@@ -50,7 +53,23 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_tabs(frame: &mut Frame, app: &mut App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title("rumor");
+    // Version lives on the top border (left), out of the way of the tabs below.
+    // When an update is found, a green badge is right-aligned on the same border.
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!("rumor v{APP_VERSION}"));
+    if let Some(info) = &app.update_available {
+        block = block.title(
+            Line::from(Span::styled(
+                format!(" ↑ {} · {} ", info.latest, info.action),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .right_aligned(),
+        );
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
 

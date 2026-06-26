@@ -357,3 +357,37 @@ async fn highlights_and_indicator_render_into_the_buffer() {
         "nav hints should be back after Esc: {status:?}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn version_and_update_badge_render_in_title_bar() {
+    use ratatui::backend::TestBackend;
+    use ratatui::style::Color;
+    use ratatui::Terminal;
+
+    let (width, height) = (100u16, 16u16);
+    let mut app = app_with_output("true", 10, 98).await;
+    app.update_available = Some(app::UpdateInfo {
+        latest: "9.9.9".into(),
+        action: "brew upgrade rumor".into(),
+    });
+
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+    let buf = terminal.backend().buffer();
+
+    // The title bar (top row) carries the version and, when present, the badge.
+    let title: String = (0..width).map(|x| buf[(x, 0)].symbol()).collect();
+    assert!(
+        title.contains(concat!("rumor v", env!("CARGO_PKG_VERSION"))),
+        "title bar should show the version: {title:?}"
+    );
+    assert!(
+        title.contains("9.9.9") && title.contains("brew upgrade rumor"),
+        "title bar should show the update badge: {title:?}"
+    );
+    // The badge is rendered on a green background.
+    assert!(
+        (0..width).any(|x| buf[(x, 0)].style().bg == Some(Color::Green)),
+        "update badge should have a green background"
+    );
+}
