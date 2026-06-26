@@ -10,6 +10,7 @@ mod search;
 mod status_color;
 mod template;
 mod ui;
+mod update;
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -30,6 +31,9 @@ use tracing::warn;
 use crate::app::App;
 use crate::config::Config;
 use crate::process::ProcessManager;
+
+/// Running version, sourced from Cargo.toml at compile time.
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // Layout: 3-row tab bar + body (with its own top+bottom border = 2 rows) +
 // 1-row status line. So body inner rows = terminal_height - 3 - 2 - 1 = -6.
@@ -360,6 +364,16 @@ async fn run(
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+    // One-shot "is a newer version available?" check, run off the UI thread so a
+    // slow brew/curl call never blocks rendering. The result (if any) arrives on
+    // this channel and lights up the status-bar badge.
+    let (update_tx, mut update_rx) = tokio::sync::mpsc::channel(1);
+    tokio::spawn(async move {
+        if let Some(info) = update::check_for_update(APP_VERSION).await {
+            let _ = update_tx.send(info).await;
+        }
+    });
+
     loop {
         terminal
             .draw(|f| ui::draw(f, &mut app))
@@ -383,6 +397,9 @@ async fn run(
                 Some(Err(e)) => warn!("event stream error: {e}"),
                 None => break,
             },
+            Some(info) = update_rx.recv() => {
+                app.update_available = Some(info);
+            }
             _ = tick.tick() => {}
         }
 
