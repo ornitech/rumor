@@ -61,10 +61,9 @@ One-time setup (so the workflow can authenticate):
 2. Grab your **Account ID** (Workers & Pages overview, right sidebar).
 3. Add both as GitHub repo secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 
-The first run creates the `getrumor` Worker and deploys it. The custom domain is attached
-automatically on every deploy via the `routes` entry in [`wrangler.jsonc`](wrangler.jsonc)
-(`getrumor.dev`, `custom_domain: true`) — Cloudflare wires the DNS + SSL since the zone is already on
-the account. No manual "Domains & Routes" dashboard step is needed.
+The first run creates the `getrumor` Worker and deploys it. Then attach the domain once: the Worker →
+Settings → Domains & Routes → add `getrumor.dev` (Cloudflare wires the DNS automatically since the
+zone is already on it).
 
 Do **not** also connect the repo via Cloudflare's dashboard "Workers Builds" Git integration — this
 Action is the single deploy path; running both would double-deploy. There is no version or tag for
