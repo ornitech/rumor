@@ -50,8 +50,8 @@ const cards = [
 </section>
 
 <style>
-  .grid-wrap { padding: 80px 0 30px; }
-  .grid-head { margin-bottom: 36px; }
+  .grid-wrap { padding: clamp(48px, 8vw, 80px) 0 30px; }
+  .grid-head { margin-bottom: clamp(24px, 4vw, 36px); }
   .grid-head .eyebrow { margin: 0 0 14px; }
   .grid-title { font-size: clamp(28px, 4vw, 44px); }
   .grid-title .accent { color: var(--info); }
@@ -81,6 +81,10 @@ const cards = [
     color: var(--text);
     white-space: nowrap;
   }
-  @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, 1fr); } }
-  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+  @media (max-width: 1024px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 768px) {
+    .grid { grid-template-columns: 1fr; }
+    /* let inline tokens wrap instead of forcing horizontal overflow */
+    .card-body :global(code) { white-space: normal; overflow-wrap: anywhere; }
+  }
 </style>

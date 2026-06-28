@@ -58,7 +58,12 @@ const { scene, accent, eyebrow } = Astro.props;
   .feature-body :global(p) { margin: 0 0 13px; }
   .feature-body :global(strong) { color: var(--text); font-weight: 600; }
 
-  @media (max-width: 940px) {
+  @media (max-width: 1024px) {
     .feature { min-height: 0; padding: 26px 0 26px 30px; }
+  }
+  @media (max-width: 768px) {
+    .feature { padding: 22px 0 22px 18px; }
+    .feature-marker { margin-bottom: 14px; }
+    .feature-title { margin: 0 0 14px; }
   }
 </style>

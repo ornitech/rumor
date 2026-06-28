@@ -1,8 +1,15 @@
 ---
 import Logo from "./Logo.astro";
 import { REPO_URL } from "../consts.ts";
+
+const links = [
+  { href: "#features", dot: "running", label: "features" },
+  { href: "#install", dot: "pending", label: "install" },
+  { href: `${REPO_URL}#configuration`, dot: "waiting", label: "docs", ext: true },
+  { href: REPO_URL, dot: "blocked", label: "github", ext: true },
+];
 ---
-<header class="nav">
+<header class="nav" data-nav>
   <div class="nav-inner container">
     <a class="brand" href="/" aria-label="rumor home">
       <Logo size={20} />
@@ -10,12 +17,32 @@ import { REPO_URL } from "../consts.ts";
       <span class="brand-meta">v0.11.0</span>
     </a>
     <nav class="nav-tabs" aria-label="Primary">
-      <a class="nav-tab" href="#features"><i class="dot running"></i>features</a>
-      <a class="nav-tab" href="#install"><i class="dot pending"></i>install</a>
-      <a class="nav-tab" href={`${REPO_URL}#configuration`} rel="noopener"><i class="dot waiting"></i>docs</a>
-      <a class="nav-tab" href={REPO_URL} rel="noopener"><i class="dot blocked"></i>github</a>
+      {links.map((l) => (
+        <a class="nav-tab" href={l.href} rel={l.ext ? "noopener" : undefined}>
+          <i class:list={["dot", l.dot]}></i>{l.label}
+        </a>
+      ))}
     </nav>
+    <button
+      class="nav-toggle"
+      type="button"
+      aria-label="Open menu"
+      aria-expanded="false"
+      aria-controls="nav-sheet"
+      data-nav-toggle
+    >
+      <span class="nav-toggle-bars"><i></i><i></i><i></i></span>
+    </button>
   </div>
+
+  <div class="nav-sheet-backdrop" data-nav-backdrop></div>
+  <nav id="nav-sheet" class="nav-sheet" aria-label="Mobile" data-nav-sheet>
+    {links.map((l) => (
+      <a class="nav-sheet-link" href={l.href} rel={l.ext ? "noopener" : undefined}>
+        <i class:list={["dot", l.dot]}></i>{l.label}
+      </a>
+    ))}
+  </nav>
 </header>
 
 <style>
@@ -56,13 +83,100 @@ import { REPO_URL } from "../consts.ts";
   .nav-tab:hover { color: var(--text); background: var(--bg-elev); border-color: var(--border-soft); }
   .nav-tab:hover .dot { opacity: 1; }
 
-  @media (max-width: 620px) {
-    .brand-meta { display: none; }
-    .nav-tabs { gap: 2px; }
-    .nav-tab { padding: 7px 8px; gap: 5px; font-size: 11.5px; }
-    .nav-tab .dot { opacity: 1; }
+  /* hamburger toggle — hidden on desktop, shown on phones */
+  .nav-toggle {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    cursor: pointer;
   }
-  @media (max-width: 430px) {
-    .nav-tab:nth-child(3) { display: none; }
+  .nav-toggle-bars { display: inline-flex; flex-direction: column; gap: 4px; }
+  .nav-toggle-bars i {
+    display: block;
+    width: 17px;
+    height: 1.5px;
+    background: currentColor;
+    border-radius: 2px;
+    transition: transform 0.2s ease, opacity 0.2s ease;
+  }
+  /* morph into an X when the sheet is open */
+  .nav.is-open .nav-toggle-bars i:nth-child(1) { transform: translateY(5.5px) rotate(45deg); }
+  .nav.is-open .nav-toggle-bars i:nth-child(2) { opacity: 0; }
+  .nav.is-open .nav-toggle-bars i:nth-child(3) { transform: translateY(-5.5px) rotate(-45deg); }
+
+  .nav-sheet-backdrop {
+    display: none;
+    position: fixed;
+    inset: 54px 0 0;
+    z-index: 55;
+    background: rgba(5, 8, 6, 0.6);
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+  .nav-sheet {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 56;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px;
+    background: rgba(9, 13, 11, 0.97);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+    transform: translateY(-8px);
+    opacity: 0;
+    transition: transform 0.2s ease, opacity 0.2s ease;
+  }
+  .nav-sheet-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 15px;
+    color: var(--text-dim);
+    padding: 13px 12px;
+    border-radius: var(--radius);
+  }
+  .nav-sheet-link .dot { width: 8px; height: 8px; opacity: 1; }
+  .nav-sheet-link:hover { color: var(--text); background: var(--bg-elev); }
+
+  @media (max-width: 768px) {
+    .nav-tabs { display: none; }
+    .nav-toggle { display: inline-flex; }
+    .nav.is-open .nav-sheet-backdrop { display: block; opacity: 1; }
+    .nav.is-open .nav-sheet { display: flex; transform: translateY(0); opacity: 1; }
   }
 </style>
+
+<script>
+  const nav = document.querySelector<HTMLElement>("[data-nav]");
+  const toggle = document.querySelector<HTMLButtonElement>("[data-nav-toggle]");
+  const backdrop = document.querySelector<HTMLElement>("[data-nav-backdrop]");
+  const links = document.querySelectorAll<HTMLAnchorElement>(".nav-sheet-link");
+
+  if (nav && toggle) {
+    const setOpen = (open: boolean) => {
+      nav.classList.toggle("is-open", open);
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      toggle.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+      document.body.style.overflow = open ? "hidden" : "";
+    };
+    toggle.addEventListener("click", () => setOpen(!nav.classList.contains("is-open")));
+    backdrop?.addEventListener("click", () => setOpen(false));
+    links.forEach((l) => l.addEventListener("click", () => setOpen(false)));
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && nav.classList.contains("is-open")) setOpen(false);
+    });
+  }
+</script>
