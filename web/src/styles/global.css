@@ -82,6 +82,7 @@ h1, h2, h3 { margin: 0; font-weight: 700; }
 
 /* ---- layout helpers ---- */
 .container { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 26px; }
+@media (max-width: 768px) { .container { padding: 0 16px; } }
 
 .display {
   font-family: var(--display);

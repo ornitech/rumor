@@ -130,7 +130,7 @@ import { REPO_URL } from "../consts.ts";
   .install-section {
     border-top: 1px solid var(--border-soft);
     margin-top: 56px;
-    padding: 84px 0 72px;
+    padding: clamp(44px, 9vw, 84px) 0 clamp(40px, 8vw, 72px);
     text-align: center;
   }
   .install-inner { display: flex; flex-direction: column; align-items: center; }
@@ -141,9 +141,10 @@ import { REPO_URL } from "../consts.ts";
   .install-widget { width: 100%; max-width: 700px; text-align: left; }
   .install-cta { display: flex; gap: 11px; margin-top: 28px; flex-wrap: wrap; justify-content: center; }
 
-  @media (max-width: 940px) {
-    .features { grid-template-columns: 1fr; gap: 0; }
-    .feat-stream { border-left: none; }
+  /* tablet: single column, terminal first, lightly pinned at the top */
+  @media (max-width: 1024px) {
+    .features { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    .feat-stream { border-left: none; padding-bottom: 0; min-width: 0; }
     .feat-term {
       order: -1;
       position: sticky;
@@ -153,5 +154,14 @@ import { REPO_URL } from "../consts.ts";
       padding: 12px 0;
       background: linear-gradient(180deg, var(--bg) 82%, transparent);
     }
+  }
+  /* phone: terminal scrolls inline at the top, no pinning (mimics pi.dev) */
+  @media (max-width: 768px) {
+    .feat-term {
+      position: static;
+      padding: 4px 0 8px;
+      background: none;
+    }
+    .install-section { margin-top: 40px; }
   }
 </style>

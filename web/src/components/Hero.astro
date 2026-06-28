@@ -90,9 +90,18 @@ import { REPO_URL } from "../consts.ts";
   @keyframes blink { 50% { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { .caret { animation: none; } }
 
-  @media (max-width: 940px) {
+  @media (max-width: 1024px) {
     .hero-grid { grid-template-columns: 1fr; gap: 38px; }
     .hero-session { order: -1; }
     .hero-title { font-size: clamp(36px, 9vw, 56px); }
+  }
+  @media (max-width: 768px) {
+    .hero { padding: 32px 0 28px; }
+    .hero-grid { gap: 28px; }
+    .eyebrow { margin-bottom: 16px; }
+    .hero-title { margin: 0 0 18px; }
+    .hero-sub { margin: 0 0 24px; }
+    .hero-cta { gap: 9px; }
+    .hero-cta .btn { flex: 1 1 auto; justify-content: center; }
   }
 </style>
