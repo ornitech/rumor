@@ -36,4 +36,8 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: web
+          # Pin to v4: the wrangler.jsonc is an assets-only Worker (no `main`),
+          # which the action's default wrangler 3.90.0 doesn't support and fails
+          # with "Missing entry-point".
+          wranglerVersion: "4"
           command: deploy
