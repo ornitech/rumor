@@ -4,6 +4,10 @@
   // command") reads this. _redirects / _headers in dist are honored.
   "name": "getrumor",
   "compatibility_date": "2024-11-01",
+  // Attach the custom domain on every deploy (idempotent). Cloudflare wires the
+  // DNS + SSL automatically since the getrumor.dev zone is already on the
+  // account. Replaces the one-time manual "Domains & Routes" dashboard step.
+  "routes": [{ "pattern": "getrumor.dev", "custom_domain": true }],
   "assets": {
     "directory": "./dist"
   }
