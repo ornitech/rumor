@@ -1,0 +1,117 @@
+---
+// Signature element: a tmux/vim-style status line pinned to the bottom of the
+// viewport. Live clock + the section you're currently in, colored by that
+// section's process. Makes the whole page feel like one live rumor session.
+---
+<aside class="statusbar" aria-hidden="true">
+  <span class="sb-seg sb-brand"><i class="dot running"></i>rumor</span>
+  <span class="sb-seg sb-station" data-sb-station>welcome</span>
+  <span class="sb-dots">
+    <i class="dot running"></i><i class="dot pending"></i><i class="dot waiting"></i><i class="dot blocked"></i><i class="dot crashed"></i>
+  </span>
+  <span class="sb-spacer"></span>
+  <span class="sb-seg sb-meta">macOS · v0.11.0</span>
+  <span class="sb-seg sb-clock" data-sb-clock>--:--:--</span>
+</aside>
+
+<style>
+  .statusbar {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 100;
+    height: var(--statusbar-h);
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.03em;
+    background: rgba(8, 12, 10, 0.92);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-top: 1px solid var(--border);
+    --sb-accent: var(--running);
+  }
+  .sb-seg { display: inline-flex; align-items: center; gap: 7px; padding: 0 13px; }
+  .sb-brand {
+    background: var(--sb-accent);
+    color: #04150c;
+    font-weight: 700;
+    transition: background 0.4s ease;
+  }
+  .sb-brand .dot { background: #04150c !important; box-shadow: none; }
+  .sb-station {
+    color: var(--text);
+    border-right: 1px solid var(--border-soft);
+    text-transform: lowercase;
+  }
+  .sb-station::before { content: "● "; color: var(--sb-accent); transition: color 0.4s ease; }
+  .sb-dots { display: inline-flex; align-items: center; gap: 8px; padding: 0 14px; }
+  .sb-dots .dot { width: 7px; height: 7px; }
+  .sb-spacer { flex: 1; }
+  .sb-meta { color: var(--text-faint); border-left: 1px solid var(--border-soft); }
+  .sb-clock {
+    color: var(--text-dim);
+    border-left: 1px solid var(--border-soft);
+    font-variant-numeric: tabular-nums;
+    min-width: 92px;
+    justify-content: center;
+  }
+  @media (max-width: 680px) {
+    .sb-dots, .sb-meta { display: none; }
+  }
+</style>
+
+<script>
+  const bar = document.querySelector<HTMLElement>(".statusbar");
+  const stationEl = document.querySelector<HTMLElement>("[data-sb-station]");
+  const clockEl = document.querySelector<HTMLElement>("[data-sb-clock]");
+
+  // live clock
+  if (clockEl) {
+    const tick = () => {
+      const d = new Date();
+      const p = (n: number) => String(n).padStart(2, "0");
+      clockEl.textContent = `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    };
+    tick();
+    setInterval(tick, 1000);
+  }
+
+  // current "station" = the [data-station] section nearest viewport center
+  const stations = Array.from(document.querySelectorAll<HTMLElement>("[data-station]"));
+  if (bar && stationEl && stations.length) {
+    let raf = 0;
+    let curr = "";
+    const update = () => {
+      raf = 0;
+      const mid = window.innerHeight / 2;
+      let best: HTMLElement | null = null;
+      let bestD = Infinity;
+      for (const s of stations) {
+        const r = s.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > window.innerHeight) continue;
+        const d = Math.abs(r.top + r.height / 2 - mid);
+        if (d < bestD) { bestD = d; best = s; }
+      }
+      if (best) {
+        const label = best.dataset.station || "";
+        if (label !== curr) {
+          curr = label;
+          stationEl.textContent = label;
+          const accent = best.dataset.accent || "running";
+          bar.style.setProperty("--sb-accent", `var(--${accent})`);
+        }
+      }
+    };
+    let settle: number | undefined;
+    const onScroll = () => {
+      if (!raf) raf = requestAnimationFrame(update);
+      clearTimeout(settle);
+      settle = window.setTimeout(update, 140);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll, { passive: true });
+    update();
+  }
+</script>

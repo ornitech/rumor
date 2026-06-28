@@ -1,0 +1,87 @@
+---
+// Standalone 1200x630 Open Graph card. Not indexed; screenshot this route to
+// produce public/og.png (see web/README.md).
+import Logo from "../components/Logo.astro";
+import "../styles/global.css";
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex" />
+    <title>rumor — OG</title>
+  </head>
+  <body class="og">
+    <div class="card">
+      <div class="top">
+        <span class="logo"><Logo size={58} /></span>
+        <span class="name">rumor</span>
+        <span class="ver">v0.11.0</span>
+      </div>
+
+      <h1 class="display headline">run your whole stack<br />in <span class="hl">one window</span>.</h1>
+
+      <p class="sub">A multi-process TUI orchestrator. One JSON file, every process side by side.</p>
+
+      <div class="statusline">
+        <span class="seg-mode">boot</span>
+        <span class="dots">
+          <i class="dot running"></i>db
+          <i class="dot running"></i>redis
+          <i class="dot running"></i>api
+          <i class="dot pending"></i>web
+        </span>
+        <span class="grow"></span>
+        <span class="clock">● 3 up</span>
+      </div>
+    </div>
+
+    <style>
+      .og { margin: 0; }
+      .card {
+        width: 1200px;
+        height: 630px;
+        padding: 64px 70px 0;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        background:
+          radial-gradient(90% 60% at 75% -10%, rgba(67, 209, 127, 0.12), transparent 60%),
+          var(--bg);
+        position: relative;
+        overflow: hidden;
+      }
+      .top { display: flex; align-items: center; gap: 15px; }
+      .top .logo { color: var(--running); display: flex; }
+      .name { font-family: var(--mono); font-size: 30px; font-weight: 700; color: var(--text); }
+      .ver { font-family: var(--mono); font-size: 18px; color: var(--text-faint); }
+      .headline {
+        font-family: var(--display);
+        font-size: 82px;
+        line-height: 1.0;
+        letter-spacing: -0.03em;
+        color: var(--text);
+        margin: 54px 0 0;
+      }
+      .headline .hl { color: var(--running); }
+      .sub { font-family: var(--mono); font-size: 23px; color: var(--text-dim); margin: 30px 0 0; max-width: 22em; }
+      .statusline {
+        position: absolute;
+        left: 0; right: 0; bottom: 0;
+        display: flex;
+        align-items: center;
+        height: 52px;
+        font-family: var(--mono);
+        font-size: 20px;
+        border-top: 1px solid var(--border);
+        background: var(--bg-tab);
+      }
+      .seg-mode { background: var(--running); color: #04150c; font-weight: 700; padding: 0 18px; height: 100%; display: flex; align-items: center; letter-spacing: 0.08em; }
+      .dots { display: flex; align-items: center; gap: 9px; padding: 0 22px; color: var(--text-dim); }
+      .dots .dot { width: 12px; height: 12px; margin-left: 14px; }
+      .dots .dot:first-child { margin-left: 0; }
+      .grow { flex: 1; }
+      .clock { padding: 0 22px; color: var(--running); }
+    </style>
+  </body>
+</html>

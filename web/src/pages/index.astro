@@ -1,0 +1,157 @@
+---
+import Base from "../layouts/Base.astro";
+import Nav from "../components/Nav.astro";
+import Footer from "../components/Footer.astro";
+import StatusBar from "../components/StatusBar.astro";
+import Hero from "../components/Hero.astro";
+import FeatureRow from "../components/FeatureRow.astro";
+import FeatureGrid from "../components/FeatureGrid.astro";
+import TerminalDemo from "../components/terminal/TerminalDemo.astro";
+import InstallTabs from "../components/InstallTabs.astro";
+import { REPO_URL } from "../consts.ts";
+---
+<Base>
+  <Nav />
+  <main>
+    <Hero />
+
+    <section id="features" class="features container">
+      <div class="feat-stream">
+        <FeatureRow scene="tabs" accent="running" eyebrow="one window">
+          <Fragment slot="title">Every process, <span class="accent">one pane of glass</span>.</Fragment>
+          <p>Point rumor at a JSON file and it runs your whole stack at once — database,
+          cache, API, frontend — each in its own tab with a full PTY and real ANSI colors.</p>
+          <p>A <strong>status dot</strong> on every tab tells you at a glance what is running, starting,
+          blocked, or crashed. Restart one with <span class="kbd">r</span>, restart everything with
+          <span class="kbd">Ctrl+R</span>, kill with <span class="kbd">k</span>.</p>
+        </FeatureRow>
+
+        <FeatureRow scene="deps" accent="pending" eyebrow="ordering">
+          <Fragment slot="title">Start things in the <span class="accent">right order</span>.</Fragment>
+          <p>Declare what each process waits for and rumor gates the startup for you — a
+          <strong>TCP port</strong> opening, a <strong>log line</strong> matching, or a one-shot command
+          <strong>exiting 0</strong>.</p>
+          <p>Migrations finish before the API boots; the API is reachable before the frontend
+          starts. Waiting tabs show exactly which gate they are stuck on, and circular graphs
+          are rejected before anything launches.</p>
+        </FeatureRow>
+
+        <FeatureRow scene="retry" accent="crashed" eyebrow="resilience">
+          <Fragment slot="title">Crashes <span class="accent">restart themselves</span>.</Fragment>
+          <p>Give a process a retry policy and rumor brings it back when it falls over —
+          with <strong>fixed</strong>, <strong>linear</strong>, or <strong>exponential</strong> backoff and an
+          optional delay cap.</p>
+          <p>The budget resets when you restart by hand, and a deliberate <span class="kbd">k</span>
+          never counts as a failure. When the budget runs out, the tab says so plainly.</p>
+        </FeatureRow>
+
+        <FeatureRow scene="focus" accent="focus" eyebrow="interactive">
+          <Fragment slot="title">Type straight <span class="accent">into any process</span>.</Fragment>
+          <p>Press <span class="kbd">Enter</span> to focus a tab and your keystrokes go right to that
+          process's PTY — drive a REPL, answer a prompt, poke a dev server. The selected tab and the
+          mode indicator turn yellow so you always know input is being forwarded.</p>
+          <p>Press <span class="kbd">Esc</span> to step back out to navigation. It is a real terminal,
+          not a log viewer.</p>
+        </FeatureRow>
+
+        <FeatureRow scene="ports" accent="info" eyebrow="dynamic ports">
+          <Fragment slot="title">No more <span class="accent">port collisions</span>.</Fragment>
+          <p>Name the port variables you need and rumor allocates free ports once per checkout,
+          persists them to <span class="kbd">.rumor-ports.json</span>, and feeds them into commands,
+          args, and dependency checks via <span class="kbd">${"{PORT}"}</span>.</p>
+          <p>Every <strong>git worktree</strong> gets its own ports, so you can run three branches of the
+          same app side by side without touching a config.</p>
+        </FeatureRow>
+
+        <FeatureRow scene="logs" accent="waiting" eyebrow="logs">
+          <Fragment slot="title">Every line, <span class="accent">captured & searchable</span>.</Fragment>
+          <p>Scroll back through any tab, search with a regex using <span class="kbd">/</span>, jump
+          between matches, and toggle line-wrap with <span class="kbd">w</span>.</p>
+          <p>Everything is mirrored to a plain-text session log on disk. Copy the path with
+          <span class="kbd">y</span> to grep it, tail it, or hand it to a teammate. Old sessions clean
+          themselves up.</p>
+        </FeatureRow>
+
+        <FeatureRow scene="raw" accent="running" eyebrow="agents & pipes">
+          <Fragment slot="title">Built for <span class="accent">agents and pipelines</span>.</Fragment>
+          <p>Add <span class="kbd">--raw</span> and rumor skips the TUI entirely: one combined stdout,
+          one <span class="kbd">[name]</span>-prefixed line per process, ANSI stripped by default.</p>
+          <p>Narrow it with <span class="kbd">--only api,web</span>, keep color with
+          <span class="kbd">--color</span>, and let <span class="kbd">rumor docs --agent</span> teach an AI
+          tool the whole config schema in one shot.</p>
+        </FeatureRow>
+      </div>
+
+      <div class="feat-term">
+        <TerminalDemo />
+      </div>
+    </section>
+
+    <FeatureGrid />
+
+    <section id="install" class="install-section" data-station="install" data-accent="running">
+      <div class="container install-inner">
+        <p class="eyebrow">get started</p>
+        <h2 class="display install-title">One command and <span class="hl">you're running</span>.</h2>
+        <p class="install-lead dim">macOS, Apple Silicon or Intel. No runtime, no daemon — a single
+        static binary.</p>
+        <div class="install-widget"><InstallTabs id="footer" /></div>
+        <div class="install-cta">
+          <a class="btn primary" href={REPO_URL} rel="noopener">Read the docs</a>
+          <a class="btn" href={`${REPO_URL}/tree/main/rumor/examples/fullstack`} rel="noopener">See a full example</a>
+        </div>
+      </div>
+    </section>
+  </main>
+  <Footer />
+  <StatusBar />
+</Base>
+
+<style>
+  .features {
+    display: grid;
+    grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+    gap: 0 56px;
+    align-items: start;
+    padding-top: 24px;
+  }
+  /* trailing room so the sticky terminal stays centered while the LAST row
+     reaches viewport center, instead of bottoming out against the grid end. */
+  .feat-stream { border-left: 1px solid var(--border-soft); padding-bottom: 14vh; }
+  .feat-term {
+    position: sticky;
+    top: 70px;
+    height: calc(100vh - var(--statusbar-h) - 92px);
+    display: flex;
+    align-items: center;
+  }
+  .feat-term > :global(.term-wrap) { width: 100%; }
+
+  .install-section {
+    border-top: 1px solid var(--border-soft);
+    margin-top: 56px;
+    padding: 84px 0 72px;
+    text-align: center;
+  }
+  .install-inner { display: flex; flex-direction: column; align-items: center; }
+  .install-inner .eyebrow { margin-bottom: 16px; }
+  .install-title { font-size: clamp(28px, 4.6vw, 52px); margin: 0 0 16px; }
+  .install-title .hl { color: var(--running); }
+  .install-lead { max-width: 500px; margin: 0 0 32px; font-size: 14px; }
+  .install-widget { width: 100%; max-width: 700px; text-align: left; }
+  .install-cta { display: flex; gap: 11px; margin-top: 28px; flex-wrap: wrap; justify-content: center; }
+
+  @media (max-width: 940px) {
+    .features { grid-template-columns: 1fr; gap: 0; }
+    .feat-stream { border-left: none; }
+    .feat-term {
+      order: -1;
+      position: sticky;
+      top: 54px;
+      height: auto;
+      z-index: 5;
+      padding: 12px 0;
+      background: linear-gradient(180deg, var(--bg) 82%, transparent);
+    }
+  }
+</style>

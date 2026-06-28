@@ -1,0 +1,16 @@
+/* Self-hosted variable fonts (latin). Space Grotesk = display, JetBrains Mono =
+   the workhorse mono. Both are single variable woff2 files covering the weight axis. */
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("/fonts/spacegrotesk.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("/fonts/jetbrainsmono.woff2") format("woff2");
+}

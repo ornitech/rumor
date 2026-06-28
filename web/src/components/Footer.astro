@@ -1,0 +1,81 @@
+---
+import Logo from "./Logo.astro";
+import { REPO_URL } from "../consts.ts";
+---
+<footer class="footer" data-station="exit" data-accent="killed">
+  <div class="footer-inner container">
+    <div class="footer-brand">
+      <span class="footer-mark"><Logo size={18} /><span>rumor</span></span>
+      <p class="footer-line mono faint">
+        <span class="prompt">~/code $</span> one window for the whole stack.
+      </p>
+    </div>
+
+    <div class="footer-cols">
+      <nav class="footer-col" aria-label="Project">
+        <span class="footer-head">project</span>
+        <a href={REPO_URL} rel="noopener">GitHub</a>
+        <a href={`${REPO_URL}#configuration`} rel="noopener">Docs</a>
+        <a href={`${REPO_URL}/releases`} rel="noopener">Releases</a>
+      </nav>
+      <nav class="footer-col" aria-label="Install">
+        <span class="footer-head">install</span>
+        <a href="#install">curl</a>
+        <a href="https://github.com/ornitech/homebrew-tap" rel="noopener">Homebrew</a>
+        <a href={REPO_URL} rel="noopener">From source</a>
+      </nav>
+    </div>
+  </div>
+
+  <div class="footer-base container">
+    <span class="faint">© Ornitech &amp; Contributors</span>
+    <span class="faint">MIT License</span>
+  </div>
+</footer>
+
+<style>
+  .footer {
+    border-top: 1px solid var(--border);
+    margin-top: 30px;
+    padding: 46px 0 24px;
+    background: linear-gradient(180deg, transparent, rgba(67, 209, 127, 0.02));
+  }
+  .footer-inner {
+    display: flex;
+    justify-content: space-between;
+    gap: 40px;
+    flex-wrap: wrap;
+  }
+  .footer-mark { display: inline-flex; align-items: center; gap: 9px; color: var(--text); }
+  .footer-mark :global(svg) { color: var(--running); }
+  .footer-mark span { font-family: var(--mono); font-weight: 700; }
+  .footer-line { font-size: 13px; margin: 14px 0 0; }
+  .footer-line .prompt { color: var(--running); }
+
+  .footer-cols { display: flex; gap: 56px; }
+  .footer-col { display: flex; flex-direction: column; gap: 9px; font-family: var(--mono); font-size: 13px; }
+  .footer-head {
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 3px;
+  }
+  .footer-col a { color: var(--text-dim); width: max-content; }
+  .footer-col a:hover { color: var(--running); }
+
+  .footer-base {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 40px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border-soft);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  @media (max-width: 560px) {
+    .footer-cols { gap: 36px; }
+    .footer-base { flex-direction: column; gap: 6px; }
+  }
+</style>

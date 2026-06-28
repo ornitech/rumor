@@ -1,0 +1,70 @@
+---
+// Sticky terminal panel. The script drives scene changes from whichever
+// [data-scene] feature row is centered in the viewport.
+---
+<div class="term-wrap">
+  <div id="term" aria-hidden="true"></div>
+  <p class="term-hint mono faint">▼ scroll — watch the session</p>
+</div>
+
+<style>
+  .term-wrap { width: 100%; }
+  .term-hint { text-align: center; font-size: 11.5px; margin: 13px 0 0; letter-spacing: 0.1em; }
+</style>
+
+<script>
+  import { initTerminal } from "./terminal.ts";
+  import { scenes } from "./scenes.ts";
+
+  const root = document.getElementById("term");
+  if (root) {
+    const term = initTerminal(root);
+    const byId = new Map(scenes.map((s) => [s.id, s]));
+    let current = "";
+
+    const apply = (id: string, animate: boolean) => {
+      if (id === current) return;
+      const scene = byId.get(id);
+      if (!scene) return;
+      current = id;
+      term.setScene(scene, { animate });
+    };
+
+    apply(scenes[0].id, false);
+
+    // Drive scenes from the feature row nearest the viewport center, recomputed
+    // on every scroll frame. This is the same method StatusBar uses, so the two
+    // stay in lockstep with no IntersectionObserver lag on fast/jumped scrolls.
+    const targets = Array.from(
+      document.querySelectorAll<HTMLElement>("article[data-scene]")
+    );
+
+    if (targets.length) {
+      let raf = 0;
+      const pick = () => {
+        raf = 0;
+        const mid = window.innerHeight / 2;
+        let best: HTMLElement | null = null;
+        let bd = Infinity;
+        for (const t of targets) {
+          const r = t.getBoundingClientRect();
+          if (r.bottom < 0 || r.top > window.innerHeight) continue;
+          const d = Math.abs(r.top + r.height / 2 - mid);
+          if (d < bd) { bd = d; best = t; }
+        }
+        if (best) apply(best.dataset.scene!, true);
+      };
+      let settle: number | undefined;
+      const onScroll = () => {
+        if (!raf) raf = requestAnimationFrame(pick);
+        // trailing tick so the scene always lands on the resting row even if the
+        // last scroll frame fired mid-flight (fast flick / abrupt stop).
+        clearTimeout(settle);
+        settle = window.setTimeout(pick, 140);
+      };
+      window.addEventListener("scroll", onScroll, { passive: true });
+      window.addEventListener("resize", onScroll, { passive: true });
+      pick();
+    }
+  }
+</script>

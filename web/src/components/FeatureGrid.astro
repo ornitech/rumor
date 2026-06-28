@@ -1,0 +1,86 @@
+---
+// Secondary features — the rest of the surface area, in a compact card grid.
+const cards = [
+  {
+    dot: "running",
+    title: "Layered env, no surprises",
+    body: "Merge the orchestrator env, shared <code>envFiles</code>, each process's <code>.env</code>, and inline <code>env</code> in a clear precedence order. Reference any of it with <code>${VAR}</code> in commands, args, and dependency checks.",
+  },
+  {
+    dot: "info",
+    title: "Run just what you need",
+    body: "Tag processes and start a subset with <code>-t backend</code>. Dependencies are pulled in transitively, so a tagged service never starts without what it needs.",
+  },
+  {
+    dot: "blocked",
+    title: "Cycles caught early",
+    body: "Circular <code>dependsOn</code> graphs are rejected at config-load time with a clear message — not discovered as a hang at runtime.",
+  },
+  {
+    dot: "waiting",
+    title: "Logs that outlive the run",
+    body: "Every process streams to a plain-text session log (ANSI stripped). Search live with <code>/</code>, copy the path with <code>y</code>, and old sessions rotate out after 7 days.",
+  },
+  {
+    dot: "pending",
+    title: "Made for agents",
+    body: "<code>rumor docs --agent</code> prints a full machine-readable config reference, and <code>--raw</code> gives AI tools and pipelines one clean, prefixed stream.",
+  },
+  {
+    dot: "running",
+    title: "Always current",
+    body: "rumor checks for new releases in the background and shows an unobtrusive badge with the right upgrade command for how you installed it.",
+  },
+];
+---
+<section class="grid-wrap container" data-station="extras" data-accent="info">
+  <div class="grid-head">
+    <p class="eyebrow">AND THE REST</p>
+    <h2 class="display grid-title">Small touches, <span class="accent">fewer papercuts</span>.</h2>
+  </div>
+  <div class="grid">
+    {cards.map((c) => (
+      <article class="card">
+        <span class:list={["dot", c.dot]}></span>
+        <h3 class="card-title">{c.title}</h3>
+        <p class="card-body dim" set:html={c.body}></p>
+      </article>
+    ))}
+  </div>
+</section>
+
+<style>
+  .grid-wrap { padding: 80px 0 30px; }
+  .grid-head { margin-bottom: 36px; }
+  .grid-head .eyebrow { margin: 0 0 14px; }
+  .grid-title { font-size: clamp(28px, 4vw, 44px); }
+  .grid-title .accent { color: var(--info); }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .card {
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius);
+    background: var(--bg-panel);
+    padding: 22px 20px;
+    transition: border-color 0.2s ease, transform 0.2s ease;
+  }
+  .card:hover { border-color: var(--border); transform: translateY(-2px); }
+  .card .dot { margin-bottom: 14px; }
+  .card-title { font-family: var(--mono); font-size: 15px; font-weight: 600; margin: 0 0 10px; letter-spacing: 0.01em; }
+  .card-body { font-size: 14px; line-height: 1.65; margin: 0; }
+  .card-body :global(code) {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    padding: 0.08em 0.36em;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--bg-elev);
+    color: var(--text);
+    white-space: nowrap;
+  }
+  @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+</style>
