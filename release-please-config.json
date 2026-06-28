@@ -1,6 +1,6 @@
 {
   "packages": {
-    ".": {
+    "rumor": {
       "release-type": "rust",
       "include-component-in-tag": false,
       "changelog-sections": [
