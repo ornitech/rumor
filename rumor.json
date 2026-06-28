@@ -1,0 +1,22 @@
+{
+  "dynamicPorts": ["WEB_PORT"],
+  "processes": [
+    {
+      "name": "install",
+      "command": "npm",
+      "args": ["install", "--no-fund", "--no-audit"],
+      "cwd": "./web",
+      "longLived": false
+    },
+    {
+      "name": "web",
+      "command": "npm",
+      "args": ["run", "dev", "--", "--port", "${WEB_PORT}"],
+      "cwd": "./web",
+      "dependsOn": [
+        { "name": "install", "until": { "exit": 0 } }
+      ],
+      "retry": { "maxRetries": 3, "strategy": "exponential", "delayMs": 500, "maxDelayMs": 5000 }
+    }
+  ]
+}
