@@ -1,347 +1,43 @@
 # rumor
 
-![rumor demo](demo.gif)
+Multi-process TUI orchestrator — run your whole dev stack in one terminal, each process in its own
+tab, with dependency gating, retry policies, and dynamic ports.
 
-Multi-process TUI orchestrator. Run a JSON-configured set of long-lived processes side by side in one terminal, each in its own PTY tab with full ANSI rendering and interactive input.
+This repository is a monorepo:
+
+| Path     | What it is                                                            |
+|----------|----------------------------------------------------------------------|
+| `rumor/` | The Rust crate — the `rumor` binary, its tests, docs, and examples.   |
+| `web/`   | The marketing site ([Astro](https://astro.build), deployed to Cloudflare Pages). |
 
 ## Install
 
-```bash
+```sh
 curl -fsSL https://raw.githubusercontent.com/ornitech/rumor/main/install.sh | sh
 ```
 
-Or via Homebrew:
-
-```bash
-brew tap ornitech/tap
-brew install rumor
-```
-
-macOS only. Override the install dir with `RUMOR_INSTALL_DIR`, or pin a version with
-`RUMOR_VERSION=v0.11.0`.
-
-## Usage
-
-```bash
-rumor [config.json] [-t|--tags TAG ...] [--raw [--only NAME ...] [--color]]
-```
-
-The config path is optional: with no argument, rumor loads `./rumor.json` from
-the current directory. Pass an explicit path to use any other config file.
-
-`rumor docs --agent` (or `-a`) prints a self-contained, machine-readable
-capability and config reference to stdout — meant for AI agents that drive rumor
-and author its config files. Bare `rumor docs` lists the available topics.
-
-### Running a subset with tags
-
-Give processes `tags` in the config, then pass `-t`/`--tags` to run only the
-matching ones:
-
-```bash
-rumor -t backend          # run every process tagged "backend"
-rumor -t backend api      # run processes tagged "backend" OR "api"
-rumor -t backend,api      # same, comma-separated
-rumor config.json -t backend
-```
-
-A process is selected if it carries **any** of the requested tags. Dependencies
-of selected processes are pulled in automatically (transitively), so a tagged
-service never hangs waiting on an untagged `dependsOn` target. If no process
-matches, rumor exits with an error. A positional config path must come before
-the first `-t`.
-
-### Raw mode (for AI agents and piping)
-
-The default UI is an interactive TUI. Pass `--raw` to skip it and stream every
-process's output to a single stdout instead, one line at a time prefixed with
-the process name:
-
-```bash
-rumor --raw
-[migration] running migration...
-[counter] counter 0
-[ticker] tick 20:52:16
-[counter] counter 1
-```
-
-This is meant for non-interactive use: an AI agent or a shell pipe that just
-wants a plain combined log. ANSI escape codes are stripped by default (they
-waste tokens and break naive line parsers); pass `--color` to keep them.
-
-`--only` narrows which processes' output prints, by name. Everything still runs
-(including dependencies) — only the printed stream is filtered:
-
-```bash
-rumor --raw --only backend,worker   # run all, print only backend + worker
-```
-
-rumor runs until you press Ctrl+C (or it receives SIGTERM), then SIGTERMs every
-child and exits. If every process is run-to-completion (`longLived: false`),
-rumor exits on its own once they have all finished. `--tags` still selects the
-run-set; `--only` is a finer print filter layered on top. Per-process session
-logs are written exactly as in TUI mode. `--only` and `--color` require `--raw`.
-
-A minimal config:
-
-```json
-{
-  "processes": [
-    { "name": "counter", "command": "bash", "args": ["-c", "i=0; while true; do echo $i; i=$((i+1)); sleep 1; done"] },
-    { "name": "repl",    "command": "python3", "args": ["-q"], "env": { "PS1": "py> " } }
-  ]
-}
-```
-
-See [`example.config.json`](example.config.json) for a fuller example.
-
-## Config schema
-
-Top level: `{ "envFiles": [ ... ], "processes": [ ... ] }`, where each entry of
-`processes` is a process object.
-
-### Top level
-
-| Field | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `processes` | process[] | *required* | The processes to run. Must be non-empty. |
-| `envFiles` | string[] | `[]` | Global `.env` files loaded for **every** process, in order. Lowest precedence in the env merge (below each process's own `<cwd>/.env`, `envFiles`, and `env`). Relative paths resolve against the config file's directory. Use for a shared monorepo root `.env`/`.env.local` so each process doesn't have to declare it. |
-| `dynamicPorts` | string[] | `[]` | Env var names that rumor resolves to free ports, allocated once per config directory (so once per git worktree) and reused on every run. Injected into every process with the **highest** precedence in the env merge and usable in `${VAR}` substitution. See [Dynamic ports](#dynamic-ports-git-worktrees). |
-
-### Process object
-
-| Field | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `name` | string | *required* | Unique within the config; shown as the tab label. |
-| `command` | string | *required* | Executable to spawn. Supports `${VAR}` substitution. |
-| `args` | string[] | `[]` | Each entry supports `${VAR}` substitution. |
-| `cwd` | string | *required* | Working directory for the spawned process. Relative paths resolve against the **config file's directory**, not where `rumor` was invoked. |
-| `env` | object&lt;string, string&gt; | `{}` | Inline env vars. Highest precedence in the env merge, below only the top-level `dynamicPorts` allocations. |
-| `envFiles` | string[] | `[]` | Extra `.env` files loaded in order *after* `<cwd>/.env`; later files override earlier ones. Relative paths resolve against the config file's directory. |
-| `dependsOn` | dependency[] | `[]` | Readiness gates that must pass before this process starts. |
-| `longLived` | bool | `true` | If `false`, a clean `exit 0` is shown as success (green) instead of a crash (red). Use for migrations and one-shot setup scripts. |
-| `tags` | string[] | `[]` | Labels for selecting a subset of processes with `-t`/`--tags`. Empty/whitespace entries are ignored. |
-| `retry` | object | *(none)* | Auto-restart policy on failure. Omit to disable (default: a process is spawned once and never auto-restarted). See [Retry object](#retry-object-retry). |
-
-### Retry object (`retry`)
-
-When present, rumor automatically restarts the process after a failed exit, up to `maxRetries` times, waiting a backoff delay between attempts. A `longLived` process that exits **at all** is a failure; a one-shot (`longLived: false`) is a failure only on a non-zero exit code or a signal. A user-initiated stop (`k` kill, `r` restart, or quit) never triggers a retry. The retry budget resets on a manual restart. Once the budget is exhausted, the tab shows `exited (...) (retries exhausted)`.
-
-| Field | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `maxRetries` | u32 | *required* | Max auto-restart attempts after a failure. Must be `>= 1` (omit the `retry` block to disable). |
-| `strategy` | string | `"fixed"` | Backoff between attempts: `"fixed"` (`delayMs`), `"linear"` (`delayMs * attempt`), or `"exponential"` (`delayMs * 2^(attempt-1)`). |
-| `delayMs` | u64 | *required* | Base delay in milliseconds. Must be `>= 1`. |
-| `maxDelayMs` | u64 | *(uncapped)* | Optional cap on the computed delay. Must be `>= delayMs` when set. |
-
-```json
-{
-  "name": "api",
-  "command": "./bin/api",
-  "cwd": "./api",
-  "retry": { "maxRetries": 5, "strategy": "exponential", "delayMs": 500, "maxDelayMs": 30000 }
-}
-```
-
-### Dependency object (`dependsOn[]`)
-
-| Field | Type | Notes |
-| --- | --- | --- |
-| `name` | string | Name of another process in this config. Cycles and self-references are rejected at load. |
-| `until` | object | Exactly one readiness condition. See variants below. |
-
-### Readiness conditions (`dependsOn[].until`)
-
-| Key | Value type | Ready when |
-| --- | --- | --- |
-| `port` | u16, or `"${VAR}"` string | A TCP connect to `127.0.0.1:port` or `[::1]:port` succeeds. |
-| `log` | string (regex) | The regex matches the dep's accumulated stdout/stderr. Supports `${VAR}` substitution. |
-| `exit` | i32, or `"${VAR}"` string | The dep process exits with this code (typically `0` for one-shot setup). |
-
-## Environment variable references
-
-String fields in the config may reference environment variables with `${NAME}`.
-Use `$${NAME}` to emit a literal `${NAME}`.
-
-Substitution applies to:
-
-- `command`
-- each entry of `args`
-- `dependsOn[].until.port` and `dependsOn[].until.exit` (write them as JSON
-  strings, e.g. `"port": "${API_PORT}"`; literal numbers also still work)
-- `dependsOn[].until.log` (the regex string)
-
-The lookup uses, in order (later wins): the orchestrator's own env, then the
-top-level (global) `envFiles`, then `<cwd>/.env`, then each per-process
-`envFiles` entry, then the process's `env` block, then the top-level
-`dynamicPorts` allocations (always highest). So env files referenced from
-the config are loaded *before* substitution.
-
-A `${...}` whose contents aren't a strict identifier (e.g. `${RATE:-1}`) is
-passed through verbatim, so shell-side interpolation in `args` keeps working.
-A referenced variable that isn't set substitutes to an empty string and emits
-a warning to `~/Library/Logs/rumor/rumor.log`.
-
-Example: a single root `.env` file is shared by every process (declared once in
-the top-level `envFiles`) and drives both the spawned processes and rumor's
-readiness check.
-
-```json
-{
-  "envFiles": ["./.env"],
-  "processes": [
-    { "name": "db", "command": "postgres", "cwd": "./db" },
-    {
-      "name": "api",
-      "command": "./bin/api",
-      "cwd": "./api",
-      "dependsOn": [
-        { "name": "db", "until": { "port": "${DB_PORT}" } }
-      ]
-    }
-  ]
-}
-```
-
-## Dynamic ports (git worktrees)
-
-Running the same config in several git worktrees normally means port clashes:
-every checkout binds the same hardcoded ports. Declare the port vars as
-`dynamicPorts` instead and rumor assigns each worktree its own:
-
-```json
-{
-  "dynamicPorts": ["API_PORT", "WEB_PORT"],
-  "processes": [
-    { "name": "api", "command": "./bin/api", "cwd": "./api" },
-    {
-      "name": "web",
-      "command": "npm",
-      "args": ["run", "dev", "--", "--port", "${WEB_PORT}"],
-      "cwd": "./web",
-      "dependsOn": [
-        { "name": "api", "until": { "port": "${API_PORT}" } }
-      ]
-    }
-  ]
-}
-```
-
-On first run, each listed var is bound to a free OS-assigned port and the
-allocation is saved to `.rumor-ports.json` next to the config file. Every
-later run reuses the stored ports verbatim, so they stay stable for that
-checkout. A different worktree is a different directory, gets its own
-`.rumor-ports.json`, and therefore its own ports — the two stacks run side
-by side without clashing.
-
-- The allocations are injected into every process's environment with the
-  highest precedence: a hardcoded `API_PORT` in an `.env` file or `env` block
-  cannot shadow a dynamic port.
-- Ports are reused without checking whether they're currently free; if a
-  leftover process still holds one, the owning process fails visibly.
-- Delete `.rumor-ports.json` to force reallocation.
-- Add `.rumor-ports.json` to your `.gitignore`.
-
-## Examples
-
-### [`examples/fullstack/`](examples/fullstack/) — four-service stack
-
-A realistic four-service topology that exercises rumor's more interesting features:
-
-- **`db`** (postgres in docker) and **`redis`** (also docker) start in parallel.
-- **`api`** (python stdlib HTTP server) waits for both via port-based readiness checks (`dependsOn` + `until.port`).
-- **`frontend`** (python static server) waits for `api`.
-
-It also demonstrates the layered env merge: a central `examples/fullstack/.env` declared **once** in the top-level `envFiles` and shared by every service, per-service `<svc>/.env.local`, and a JSON `env` block on one service that overrides both files. Every `.env.local` overrides something visible (db's password, redis's log level, api's log level, frontend's title). All four port numbers are `dynamicPorts` — allocated per checkout, persisted in `.rumor-ports.json`, and flowing into docker `-p` flags, listen ports, and `dependsOn.until.port` checks via `${VAR}` substitution.
-
-Each service also carries a `retry` policy, covering all three backoff strategies plus the `fixed` default: `db` retries with `exponential` backoff, `redis` with the default `fixed` (it omits `strategy`), `api` with `linear`, and `frontend` with `exponential`. If a container or server crashes, rumor restarts it up to `maxRetries` times before giving up.
-
-Run:
-
-```bash
-rumor examples/fullstack/fullstack.config.json
-# or, from a clone:
-cargo run -- examples/fullstack/fullstack.config.json
-```
-
-Requires `docker` and `python3` (no fixed free ports — they're allocated dynamically). The assigned ports are in `examples/fullstack/.rumor-ports.json`; open `http://localhost:<FRONTEND_PORT>` for the frontend. See the example's [README](examples/fullstack/README.md) for the env-precedence table and verification steps.
-
-## Keys
-
-Three modes: **Nav** (default), **Focus** (keystrokes go to the selected child),
-and **Details** (a read-only metadata screen for the selected process).
-
-| Key | Action |
-| --- | --- |
-| `Left` / `Right` | Switch tab |
-| `Up` / `Down` / `PgUp` / `PgDn` / `Home` / `End` | Scroll the selected tab's scrollback |
-| `Enter` | Enter Focus mode (input forwarded to the child PTY) |
-| `Esc` | Leave Focus mode |
-| `r` | Restart the selected process. Sends `SIGTERM`, then `SIGKILL` after a 3s grace, and waits for the old process to fully exit before respawning (avoids port-in-use races). |
-| `k` | Kill the selected process. Sends `SIGTERM`, then `SIGKILL` after a 3s grace; does not respawn. |
-| `Ctrl+R` | Restart all |
-| `Ctrl+K` | Kill all |
-| `w` | Toggle line-wrap on the selected tab |
-| `y` | Copy the selected process's session log path to the clipboard (also works in the details screen) |
-| `d` | Open the process details screen (`Esc`/`d` to close; `↑/↓`, `PgUp/PgDn`, `Home` to scroll; `y` to copy the session log path) |
-| `q` / `Ctrl+C` | Quit |
-
-## Status colors
-
-Each tab's dot and the status line are color-coded so you can read the whole stack at a glance:
-
-| Color | Meaning |
-| --- | --- |
-| 🟢 Green | Running |
-| 🟡 Yellow | Starting, or waiting for dependencies |
-| 🟣 Magenta | Blocked by an unmet dependency |
-| 🔴 Red | Exited with a non-zero code, or a `longLived` process that exited at all; also a hard spawn failure (e.g. command not found) |
-| ⚫ Gray | Signal-killed (e.g. via `k` / `Ctrl+K`) — a deliberate stop, not an error |
-
-A clean `exit 0` shows green only for short-lived processes (`longLived: false`); for a
-long-lived service any exit is treated as a crash and shown red.
-
-When a process isn't running, its tab body shows one of three states instead of terminal
-output: `waiting for dependencies`, `blocked: <reason>`, or `spawn failed: <error>`. The
-waiting and blocked tabs also print a live diagnostic log of the readiness checks, so you
-can see exactly which port/log/exit gate is still pending.
-
-## Process details (`d`)
-
-Press `d` on the selected tab to open a read-only details screen — the quickest way to
-confirm what a process was actually launched with. It shows:
-
-- **PID** and current **Status**
-- **Command**, **Args**, and **CWD**
-- **Long-lived** flag
-- **Env files** loaded for the process
-- **Depends on** — each dependency and its readiness condition
-- **Environment** — the fully resolved, post-merge environment the process received (or, if
-  it hasn't spawned yet, the config `env` overrides). This is the way to verify env-file
-  layering and `${VAR}` substitution actually produced what you expected.
-- **Log** — the process's session log file. Press `y` to copy the path to the clipboard.
-
-## Session logs
-
-Every process's output is also captured to a plain-text file, ANSI escape codes stripped,
-so you can grep it or paste it into an LLM after something misbehaves. One directory per
-run:
-
-```
-~/Library/Logs/rumor/sessions/<config>-<YYYYMMDD-HHMMSS>/<process>.log   # macOS
-~/.local/share/rumor/sessions/...                                        # Linux
-```
-
-- Restarting a process appends to its file with a `----- restarted at HH:MM:SS -----` separator.
-- The session directory is printed to the terminal when rumor exits, `y` copies the selected
-  process's log path to the clipboard, and each file's path is shown in the details screen (`d`).
-- Sessions older than 7 days are deleted on startup.
-- Set `RUMOR_NO_SESSION_LOGS=1` to disable capture.
-
-## Logs
-
-Written to `~/Library/Logs/rumor/rumor.log` on macOS (`~/.local/share/rumor/rumor.log` on Linux). Set `RUMOR_LOG=debug` for verbose tracing.
+Or with Homebrew: `brew tap ornitech/tap && brew install rumor`.
+See [`rumor/README.md`](rumor/README.md) for full usage, configuration, and examples.
+
+## Develop
+
+- **The site, with rumor** (dogfooding): run `rumor` from the repo root. The root
+  [`rumor.json`](rumor.json) installs the site's dependencies as a one-shot, then starts the Astro
+  dev server on a dynamically allocated `WEB_PORT` once the install exits 0. The terminal prints the
+  local URL. With a dev build instead of an installed binary: `rumor/scripts/run.sh rumor.json`.
+- **The app:** `cd rumor && cargo run -- example.config.json` (see `rumor/README.md`).
+- **The site, directly:** `cd web && npm install && npm run dev` (see `web/README.md`).
+
+## Releases
+
+The `rumor` crate is versioned with [release-please](https://github.com/googleapis/release-please)
+(config at the repo root scopes it to `rumor/`). Tagging `v*` triggers
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds macOS binaries,
+publishes them to GitHub Releases, and updates the Homebrew tap.
+
+The site has no version: it redeploys to Cloudflare Pages on every push to `main`, with preview
+deployments for pull requests. See [`web/README.md`](web/README.md).
 
 ## License
 
-[MIT](LICENSE)
+MIT — see [LICENSE](LICENSE).

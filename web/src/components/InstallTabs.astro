@@ -1,0 +1,141 @@
+---
+import { INSTALL_CURL } from "../consts.ts";
+
+interface Props { id: string; compact?: boolean; }
+const { id, compact = false } = Astro.props;
+
+const tabs = [
+  { key: "curl", label: "curl", dot: "running", cmd: INSTALL_CURL },
+  { key: "brew", label: "homebrew", dot: "pending", cmd: "brew tap ornitech/tap && brew install rumor" },
+  { key: "source", label: "source", dot: "waiting", cmd: "git clone https://github.com/ornitech/rumor\ncd rumor/rumor && cargo build --release" },
+];
+---
+<div class:list={["installer term", { compact }]} data-install={id} style="--scene-accent: var(--running)">
+  <div class="term-bar">
+    <span class="lights"><i></i><i></i><i></i></span>
+    <span class="term-title">rumor · <b>install</b></span>
+    <span class="spacer"></span>
+    {compact
+      ? <a class="more-link" href="#install">more ways ↓</a>
+      : <span class="term-run"><i class="dot running"></i>one line</span>}
+  </div>
+
+  {!compact && (
+    <div class="term-tabs" role="tablist" aria-label="Install methods">
+      {tabs.map((t, i) => (
+        <button
+          class:list={["term-tab", { selected: i === 0 }]}
+          role="tab"
+          aria-selected={i === 0 ? "true" : "false"}
+          data-tab={t.key}
+        ><i class:list={["dot", t.dot]}></i>{t.label}</button>
+      ))}
+    </div>
+  )}
+
+  <div class="installer-body">
+    <span class="prompt">$</span>
+    <pre class="installer-cmd" data-cmd>{tabs[0].cmd}</pre>
+  </div>
+
+  <div class="term-foot">
+    <button class="seg-copy" data-copy>copy</button>
+    <span class="seg-text" data-copyhint>to clipboard</span>
+    <span class="seg-spacer"></span>
+    <span class="seg-clock">macOS · arm + intel</span>
+  </div>
+
+  <script type="application/json" data-cmds set:html={JSON.stringify(
+    Object.fromEntries(tabs.map((t) => [t.key, t.cmd]))
+  )} />
+</div>
+
+<style>
+  .installer { width: 100%; }
+  .installer .more-link {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+  }
+  .installer .more-link:hover { color: var(--running); border-color: var(--running); }
+
+  .installer-body {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 16px 16px;
+  }
+  .installer-body .prompt { color: var(--running); font-weight: 700; line-height: 1.6; }
+  .installer-cmd {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 14px;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+  }
+
+  /* copy lives in the status line, styled as a tmux segment — not a boxed button
+     in the code row like the genre default. */
+  .seg-copy {
+    appearance: none;
+    border: none;
+    cursor: pointer;
+    background: var(--scene-accent);
+    color: #04150c;
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    padding: 0 13px;
+    display: inline-flex;
+    align-items: center;
+  }
+  .seg-copy:hover { filter: brightness(1.08); }
+  .seg-copy.copied { background: var(--running); }
+  .term-foot .seg-text[data-copyhint] { color: var(--text-dim); }
+
+  /* method tabs inherit .term-tab look; reset button chrome */
+  .installer .term-tab { appearance: none; background: none; cursor: pointer; font-family: var(--mono); }
+  .installer .term-tab.selected { background: var(--bg-elev); }
+</style>
+
+<script>
+  document.querySelectorAll<HTMLElement>("[data-install]").forEach((root) => {
+    const cmds = JSON.parse(root.querySelector("[data-cmds]")?.textContent || "{}");
+    const cmdEl = root.querySelector<HTMLElement>("[data-cmd]");
+    const copyEl = root.querySelector<HTMLButtonElement>("[data-copy]");
+    const hintEl = root.querySelector<HTMLElement>("[data-copyhint]");
+    const tabs = root.querySelectorAll<HTMLButtonElement>(".term-tab");
+
+    tabs.forEach((tab) =>
+      tab.addEventListener("click", () => {
+        tabs.forEach((t) => {
+          t.classList.remove("selected");
+          t.setAttribute("aria-selected", "false");
+        });
+        tab.classList.add("selected");
+        tab.setAttribute("aria-selected", "true");
+        if (cmdEl) cmdEl.textContent = cmds[tab.dataset.tab || ""] || "";
+      })
+    );
+
+    copyEl?.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(cmdEl?.textContent || "");
+        copyEl.textContent = "copied";
+        copyEl.classList.add("copied");
+        if (hintEl) hintEl.textContent = "✓ in clipboard";
+        setTimeout(() => {
+          copyEl.textContent = "copy";
+          copyEl.classList.remove("copied");
+          if (hintEl) hintEl.textContent = "to clipboard";
+        }, 1600);
+      } catch {
+        /* clipboard unavailable */
+      }
+    });
+  });
+</script>

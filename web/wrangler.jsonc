@@ -1,0 +1,10 @@
+{
+  // Deploys the built static site (web/dist) to Cloudflare as an assets-only
+  // Worker — no server code. `npx wrangler deploy` (the dashboard "Deploy
+  // command") reads this. _redirects / _headers in dist are honored.
+  "name": "getrumor",
+  "compatibility_date": "2024-11-01",
+  "assets": {
+    "directory": "./dist"
+  }
+}

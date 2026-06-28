@@ -1,7 +1,16 @@
-/target
+# Rust (crate lives in rumor/)
+target/
 **/*.rs.bk
 *.log
 .rumor-ports.json
+
+# Web (Astro site in web/)
+web/node_modules/
+web/dist/
+web/.astro/
+web/.wrangler/
+
+# Editors / OS
 .DS_Store
 .idea/
 .vscode/

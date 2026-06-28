@@ -43,17 +43,17 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+            rumor/target
+          key: cargo-${{ matrix.target }}-${{ hashFiles('rumor/Cargo.lock') }}
 
       - name: Build release binary
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo build --release --locked --manifest-path rumor/Cargo.toml --target ${{ matrix.target }}
 
       - name: Package tarball
         id: pkg
         run: |
           ARTIFACT="rumor-${{ matrix.target }}.tar.gz"
-          tar -czf "$ARTIFACT" -C "target/${{ matrix.target }}/release" rumor
+          tar -czf "$ARTIFACT" -C "rumor/target/${{ matrix.target }}/release" rumor
           SHA256=$(shasum -a 256 "$ARTIFACT" | awk '{print $1}')
           printf '%s  %s\n' "$SHA256" "$ARTIFACT" > "$ARTIFACT.sha256"
           echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"

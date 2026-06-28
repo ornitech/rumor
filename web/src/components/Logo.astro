@@ -1,0 +1,41 @@
+---
+// Pixel-block "r" mark. Rendered from a bitmap matrix so it stays crisp at any
+// size. `size` is the rendered pixel height; color inherits via currentColor.
+interface Props { size?: number; class?: string; title?: string; }
+const { size = 28, class: cls = "", title = "rumor" } = Astro.props;
+
+// 5 cols x 7 rows lowercase "r" with a blocky terminal feel.
+const M = [
+  "11100",
+  "11110",
+  "11000",
+  "11000",
+  "11000",
+  "11000",
+  "11000",
+];
+const cols = M[0].length;
+const rows = M.length;
+const cell = 4; // viewBox units per pixel
+const gap = 0.5;
+const cells: { x: number; y: number }[] = [];
+M.forEach((row, y) =>
+  row.split("").forEach((c, x) => { if (c === "1") cells.push({ x, y }); })
+);
+const w = cols * cell;
+const h = rows * cell;
+---
+<svg
+  class={cls}
+  width={(size * cols) / rows}
+  height={size}
+  viewBox={`0 0 ${w} ${h}`}
+  fill="currentColor"
+  role="img"
+  aria-label={title}
+  shape-rendering="crispEdges"
+>
+  {cells.map(({ x, y }) => (
+    <rect x={x * cell} y={y * cell} width={cell - gap} height={cell - gap} rx="0.4" />
+  ))}
+</svg>

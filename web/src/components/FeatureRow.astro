@@ -1,0 +1,64 @@
+---
+interface Props {
+  scene: string;     // matches a scene id in terminal/scenes.ts
+  accent: string;    // palette token
+  eyebrow: string;
+}
+const { scene, accent, eyebrow } = Astro.props;
+---
+<article
+  class="feature"
+  data-scene={scene}
+  data-station={scene}
+  data-accent={accent}
+  style={`--row-accent: var(--${accent})`}
+>
+  <div class="feature-marker">
+    <span class="node"></span>
+    <span class="feature-tag">{eyebrow}</span>
+  </div>
+  <h2 class="display feature-title"><slot name="title" /></h2>
+  <div class="feature-body dim"><slot /></div>
+</article>
+
+<style>
+  .feature {
+    position: relative;
+    min-height: 82vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 7vh 0 7vh 30px;
+  }
+  .feature-marker { display: flex; align-items: center; gap: 11px; margin-bottom: 18px; }
+  .node {
+    position: absolute;
+    left: 0;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--row-accent);
+    transform: translateX(-50%);
+    box-shadow: 0 0 0 4px var(--bg), 0 0 12px var(--row-accent);
+  }
+  .feature-tag {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--row-accent);
+  }
+  .feature-title {
+    font-size: clamp(28px, 4vw, 46px);
+    margin: 0 0 20px;
+  }
+  .feature-title :global(.accent) { color: var(--row-accent); }
+  .feature-body { font-size: 15px; line-height: 1.72; max-width: 30em; }
+  .feature-body :global(p) { margin: 0 0 13px; }
+  .feature-body :global(strong) { color: var(--text); font-weight: 600; }
+
+  @media (max-width: 940px) {
+    .feature { min-height: 0; padding: 26px 0 26px 30px; }
+  }
+</style>

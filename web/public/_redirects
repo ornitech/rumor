@@ -1,0 +1,3 @@
+# Vanity installer URL → canonical script at the repo root.
+# Lets the homepage use `curl -fsSL https://<domain>/install.sh | sh`.
+/install.sh  https://raw.githubusercontent.com/ornitech/rumor/main/install.sh  302
