@@ -27,6 +27,9 @@ See [`rumor/README.md`](rumor/README.md) for full usage, configuration, and exam
   local URL. With a dev build instead of an installed binary: `rumor/scripts/run.sh rumor.json`.
 - **The app:** `cd rumor && cargo run -- example.config.json` (see `rumor/README.md`).
 - **The site, directly:** `cd web && npm install && npm run dev` (see `web/README.md`).
+- **Commit hooks:** run `git config core.hooksPath .githooks` once to enable the
+  [`commit-msg`](.githooks/commit-msg) hook that enforces [Conventional Commits](https://www.conventionalcommits.org)
+  locally (the same types CI checks on PR titles).
 
 ## Releases
 

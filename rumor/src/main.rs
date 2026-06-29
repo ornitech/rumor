@@ -209,6 +209,7 @@ fn print_docs_index<W: Write>(out: &mut W) {
 fn print_usage<W: Write>(out: &mut W) {
     let _ = writeln!(out, "usage: rumor [config.json] [-t|--tags TAG ...] [--raw [--only NAME ...] [--color]]");
     let _ = writeln!(out, "       rumor docs --agent");
+    let _ = writeln!(out, "       rumor update");
     let _ = writeln!(out, "       rumor -v|--version");
     let _ = writeln!(out);
     let _ = writeln!(out, "With no config argument, rumor loads ./rumor.json from the current directory.");
@@ -257,6 +258,12 @@ async fn main() -> Result<()> {
         }
         print_docs_index(&mut io::stderr());
         std::process::exit(2);
+    }
+
+    // `update` subcommand: upgrade the binary in place and exit, before any
+    // config loading so it works with no rumor.json present.
+    if args.get(1).map(String::as_str) == Some("update") {
+        return update::run_self_update().await;
     }
 
     let CliArgs {
