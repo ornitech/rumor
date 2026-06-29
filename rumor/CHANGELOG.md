@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.0](https://github.com/ornitech/rumor/compare/v0.11.0...v0.12.0) (2026-06-29)
+
+
+### Features
+
+* **cli:** add 'rumor update' subcommand to self-upgrade in place ([#41](https://github.com/ornitech/rumor/issues/41)) ([c617242](https://github.com/ornitech/rumor/commit/c61724231af1e01b9abbe8aa90d645a6643f0414))
+* marketing site (getrumor.dev) + monorepo restructure ([#39](https://github.com/ornitech/rumor/issues/39)) ([a92f6b4](https://github.com/ornitech/rumor/commit/a92f6b4606ec5afe1c077eab1e1aaee3bd30caf3))
+
 ## [0.11.0](https://github.com/ornitech/rumor/compare/v0.10.0...v0.11.0) (2026-06-24)
 
 
