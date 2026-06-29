@@ -9,6 +9,7 @@
 
 use std::time::Duration;
 
+use anyhow::{Context, Result};
 use serde::Deserialize;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -18,6 +19,8 @@ use crate::app::UpdateInfo;
 
 const GITHUB_REPO: &str = "ornitech/rumor";
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+/// The curl one-liner installer, used to upgrade non-Homebrew installs in place.
+const INSTALL_URL: &str = "https://raw.githubusercontent.com/ornitech/rumor/main/install.sh";
 
 /// How the running binary was installed, inferred from its on-disk path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +42,37 @@ fn detect_medium() -> InstallMedium {
             }
         })
         .unwrap_or(InstallMedium::Other)
+}
+
+/// Upgrade the running binary in place using the same medium it was installed
+/// with: `brew upgrade rumor` for Homebrew installs, otherwise re-running the
+/// curl installer (which fetches the latest release). The upgrade tool inherits
+/// this process's stdio so its progress is shown live. Backs the `rumor update`
+/// subcommand.
+pub async fn run_self_update() -> Result<()> {
+    let (program, args, human) = match detect_medium() {
+        InstallMedium::Homebrew => (
+            "brew",
+            vec!["upgrade".to_string(), "rumor".to_string()],
+            "brew upgrade rumor".to_string(),
+        ),
+        InstallMedium::Other => {
+            let pipeline = format!("curl -fsSL {INSTALL_URL} | sh");
+            ("sh", vec!["-c".to_string(), pipeline.clone()], pipeline)
+        }
+    };
+
+    println!("rumor update: running `{human}`");
+    let status = Command::new(program)
+        .args(&args)
+        .status()
+        .await
+        .with_context(|| format!("could not run `{human}`"))?;
+    if !status.success() {
+        anyhow::bail!("update failed: `{human}` exited with {status}");
+    }
+    println!("rumor update: up to date");
+    Ok(())
 }
 
 /// Check for an update through the medium the binary was installed with.
