@@ -2,6 +2,7 @@
 // Signature element: a tmux/vim-style status line pinned to the bottom of the
 // viewport. Live clock + the section you're currently in, colored by that
 // section's process. Makes the whole page feel like one live rumor session.
+import { VERSION } from "../consts.ts";
 ---
 <aside class="statusbar" aria-hidden="true">
   <span class="sb-seg sb-brand"><i class="dot running"></i>rumor</span>
@@ -10,7 +11,7 @@
     <i class="dot running"></i><i class="dot pending"></i><i class="dot waiting"></i><i class="dot blocked"></i><i class="dot crashed"></i>
   </span>
   <span class="sb-spacer"></span>
-  <span class="sb-seg sb-meta">macOS · v0.11.0</span>
+  <span class="sb-seg sb-meta">macOS · v{VERSION}</span>
   <span class="sb-seg sb-clock" data-sb-clock>--:--:--</span>
 </aside>
 
