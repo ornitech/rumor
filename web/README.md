@@ -39,11 +39,18 @@ status bar as you scroll past it.
 
 ## Open Graph image
 
-`/og` is a 1200×630 card. Regenerate `public/og.png` after design changes by screenshotting it:
+`/og` is a 1200×630 card. It is intentionally **version-less** — social platforms cache
+OG images for days, so a live version there would be misleading, and `public/og.png` only
+needs regenerating when the card's *design* changes (not on releases).
+
+Regenerate it locally with headless Chrome (no extra dependency, no CI involvement):
 
 ```sh
-npm run dev
-# capture http://localhost:4321/og at 1200x630 → public/og.png
+npm run build && npm run preview &           # serve the built /og on :4321
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --headless=new --hide-scrollbars --force-device-scale-factor=1 \
+  --window-size=1200,630 --screenshot="public/og.png" http://localhost:4321/og
+kill %1                                       # stop preview
 ```
 
 ## Deploy (Cloudflare, via GitHub Actions)
