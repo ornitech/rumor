@@ -1,13 +1,17 @@
 name: Deploy site
 
-# Auto-deploys the marketing site to Cloudflare, but ONLY when something under
-# web/ (or this workflow) changes — a Rust-only commit to rumor/ won't trigger it.
+# Auto-deploys the marketing site to Cloudflare. Triggers on web/ changes and on
+# the two rumor/ sources the site mirrors at build time: the version (Cargo.toml)
+# and the agent docs (AGENTS_GUIDE.md). A release bumps Cargo.toml, so the site
+# redeploys with the new version automatically; editing the guide redeploys /docs.
 on:
   push:
     branches: [main]
     paths:
       - "web/**"
       - ".github/workflows/deploy-web.yml"
+      - "rumor/Cargo.toml"
+      - "rumor/docs/AGENTS_GUIDE.md"
   workflow_dispatch: {} # allow a manual run from the Actions tab if ever needed
 
 permissions:
