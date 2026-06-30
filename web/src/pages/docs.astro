@@ -1,0 +1,112 @@
+---
+// The on-site docs page renders rumor/docs/AGENTS_GUIDE.md verbatim — the same
+// reference the binary prints with `rumor docs --agent`. The markdown is mirrored
+// into src/generated/ at build time (scripts/sync-version.mjs), so editing the
+// guide in the rumor crate is the only way to change this page. Never edit a copy.
+import Base from "../layouts/Base.astro";
+import Nav from "../components/Nav.astro";
+import Footer from "../components/Footer.astro";
+import StatusBar from "../components/StatusBar.astro";
+import { Content } from "../generated/agents-guide.md";
+---
+<Base
+  title="rumor — docs"
+  description="The rumor reference: CLI usage, config schema, dynamic ports, and more. The same guide rumor prints with `rumor docs --agent`."
+>
+  <Nav />
+  <main class="docs container" data-station="docs" data-accent="info">
+    <article class="prose">
+      <Content />
+    </article>
+  </main>
+  <Footer />
+  <StatusBar />
+</Base>
+
+<style>
+  .docs {
+    padding-top: 40px;
+    padding-bottom: calc(var(--statusbar-h) + 64px);
+  }
+  .prose {
+    max-width: 760px;
+    margin: 0 auto;
+    color: var(--text-dim);
+    font-size: 15px;
+    line-height: 1.7;
+  }
+  .prose :global(h1) {
+    font-family: var(--display);
+    font-size: clamp(30px, 5vw, 44px);
+    color: var(--text);
+    margin: 0 0 28px;
+    letter-spacing: -0.01em;
+  }
+  .prose :global(h2) {
+    font-family: var(--display);
+    font-size: 24px;
+    color: var(--text);
+    margin: 48px 0 14px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border-soft);
+  }
+  .prose :global(h3) {
+    font-family: var(--mono);
+    font-size: 16px;
+    color: var(--text);
+    margin: 28px 0 10px;
+  }
+  .prose :global(p) { margin: 0 0 16px; }
+  .prose :global(a) { color: var(--running); text-decoration: underline; text-underline-offset: 2px; }
+  .prose :global(strong) { color: var(--text); }
+  .prose :global(ul),
+  .prose :global(ol) { margin: 0 0 16px; padding-left: 22px; }
+  .prose :global(li) { margin: 4px 0; }
+  .prose :global(code) {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: var(--bg-elev);
+    border: 1px solid var(--border-soft);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--text);
+  }
+  .prose :global(pre) {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 0 0 18px;
+  }
+  .prose :global(pre code) {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  .prose :global(table) {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0 0 20px;
+    font-size: 13.5px;
+  }
+  .prose :global(th),
+  .prose :global(td) {
+    text-align: left;
+    padding: 7px 12px;
+    border: 1px solid var(--border-soft);
+  }
+  .prose :global(th) {
+    font-family: var(--mono);
+    color: var(--text);
+    background: var(--bg-elev);
+  }
+  .prose :global(blockquote) {
+    margin: 0 0 16px;
+    padding-left: 14px;
+    border-left: 2px solid var(--border);
+    color: var(--text-faint);
+  }
+</style>

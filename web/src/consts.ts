@@ -2,6 +2,10 @@
 // (used for canonical URLs, Open Graph tags, and the generated sitemap).
 export const SITE_URL = "https://getrumor.dev";
 
+// Generated from rumor/Cargo.toml by scripts/sync-version.mjs (runs pre-build).
+// Re-exported here so components import the version from one stable path.
+export { VERSION } from "./generated/version.ts";
+
 export const SITE_NAME = "rumor";
 export const SITE_TAGLINE = "Multi-process TUI orchestrator";
 export const SITE_DESCRIPTION =

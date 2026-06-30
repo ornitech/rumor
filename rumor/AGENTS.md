@@ -32,3 +32,13 @@ Usage: `rumor-<branch> <config.json>` (e.g.
 
 When starting work on a new branch, create the matching `rumor-<branch>` launcher
 if it does not already exist.
+
+## Keep docs and the website in sync
+
+`docs/AGENTS_GUIDE.md` is the single source of truth for user-facing behavior. It
+is embedded in the binary (`rumor docs --agent`) and rendered as the `/docs` page
+on getrumor.dev. When you change a command, flag, keybinding, config field, or
+status meaning, update `docs/AGENTS_GUIDE.md` in the same change, then review the
+marketing copy in `web/` for the same fact. The version badge on the site is read
+from `Cargo.toml` automatically, so never edit a version string in `web/`. See the
+root `AGENTS.md` for the full sync contract.

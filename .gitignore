@@ -9,6 +9,8 @@ web/node_modules/
 web/dist/
 web/.astro/
 web/.wrangler/
+# Mirrored from rumor/ at build time by web/scripts/sync-version.mjs
+web/src/generated/
 
 # Editors / OS
 .DS_Store

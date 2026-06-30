@@ -1,11 +1,11 @@
 ---
 import Logo from "./Logo.astro";
-import { REPO_URL } from "../consts.ts";
+import { REPO_URL, VERSION } from "../consts.ts";
 
 const links = [
   { href: "#features", dot: "running", label: "features" },
   { href: "#install", dot: "pending", label: "install" },
-  { href: `${REPO_URL}#configuration`, dot: "waiting", label: "docs", ext: true },
+  { href: "/docs", dot: "waiting", label: "docs" },
   { href: REPO_URL, dot: "blocked", label: "github", ext: true },
 ];
 ---
@@ -14,7 +14,7 @@ const links = [
     <a class="brand" href="/" aria-label="rumor home">
       <Logo size={20} />
       <span class="brand-name">rumor</span>
-      <span class="brand-meta">v0.11.0</span>
+      <span class="brand-meta">v{VERSION}</span>
     </a>
     <nav class="nav-tabs" aria-label="Primary">
       {links.map((l) => (
