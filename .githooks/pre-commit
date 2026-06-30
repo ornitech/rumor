@@ -1,0 +1,23 @@
+#!/bin/sh
+# Soft reminder to keep the website in sync with the app. If a commit changes app
+# behavior (rumor/src/**) but touches neither the agent docs nor the web/ tree,
+# print a nudge to review them. This NEVER blocks the commit — it only prints.
+#
+# Activate once per clone:  git config core.hooksPath .githooks
+
+staged="$(git diff --cached --name-only)"
+
+# Anything under rumor/src/ is app behavior.
+echo "$staged" | grep -qE '^rumor/src/' || exit 0
+
+# Already updated the docs source or some web file? Nothing to nag about.
+echo "$staged" | grep -qE '^rumor/docs/AGENTS_GUIDE\.md$|^web/' && exit 0
+
+cat >&2 <<'EOF'
+note: this commit changes rumor/src/ but not rumor/docs/AGENTS_GUIDE.md or web/.
+      If you changed a command, flag, keybinding, config field, or status meaning,
+      update rumor/docs/AGENTS_GUIDE.md (the source for `rumor docs` and the site's
+      /docs page) and review the marketing copy in web/. See AGENTS.md.
+      (This is only a reminder; the commit will proceed.)
+EOF
+exit 0
