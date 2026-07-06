@@ -425,6 +425,84 @@ async fn dep_with_log_condition_unblocks_dependent() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminate_reaps_grandchild_not_just_wrapper() {
+    // Regression: a non-forwarding wrapper (sh -c, pnpm, npm) whose real
+    // workload is a grandchild that ignores TERM/HUP (like nx/node's graceful
+    // handlers) must be reaped as a group, not left orphaned at PPID 1.
+    //
+    // rumor spawns the outer `sh` (portable_pty setsid => it leads its own
+    // process group, pgid == pid). Both the outer sh and the inner `sh` it
+    // backgrounds trap TERM+HUP, mirroring the production case where the wrapper
+    // outlives SIGTERM until the grace period expires (the `SIGTERM grace
+    // expired; sending SIGKILL` path). The inner sh is a group member whose own
+    // pid != pgid and which survives everything but SIGKILL. terminate escalates
+    // to SIGKILL after grace: hitting only the leader pid orphans the inner sh;
+    // hitting the group (negated pid) reaps it.
+    let dir = tmpdir();
+    let pidfile = dir.join("grandchild.pid");
+
+    let cfg = ProcessConfig {
+        name: "wrap".into(),
+        command: "sh".into(),
+        args: vec![
+            "-c".into(),
+            format!(
+                "trap '' TERM HUP; \
+                 sh -c 'trap \"\" TERM HUP; echo $$ > {}; while true; do sleep 1; done' & wait",
+                pidfile.display()
+            ),
+        ],
+        cwd: dir,
+        env_files: vec![],
+        global_env_files: vec![],
+        env: HashMap::new(),
+        dynamic_ports: HashMap::new(),
+        depends_on: vec![],
+        long_lived: true,
+        tags: vec![],
+        retry: None,
+    };
+
+    let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
+    let mgr = ProcessManager::new(vec![cfg], size, None);
+    let proc = wait_for_process(&mgr, 0).await;
+
+    // Wait for the grandchild to record its pid.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let grandchild: i32 = loop {
+        if let Ok(s) = std::fs::read_to_string(&pidfile) {
+            if let Ok(pid) = s.trim().parse::<i32>() {
+                break pid;
+            }
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("grandchild pid never recorded");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+
+    let alive = |pid: i32| unsafe { libc::kill(pid, 0) == 0 };
+    assert!(alive(grandchild), "grandchild should be alive before terminate");
+
+    // Terminate the slot: SIGTERM the group, then SIGKILL the group after grace.
+    proc.terminate(Duration::from_millis(500));
+    let _ = tokio::time::timeout(Duration::from_secs(3), proc.wait_for_exit()).await;
+
+    // The group SIGKILL must have reaped the trapping grandchild.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while alive(grandchild) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    if alive(grandchild) {
+        // Don't leak a busy-idling orphan if the assertion is about to fail.
+        unsafe { libc::kill(grandchild, libc::SIGKILL) };
+        panic!("grandchild {grandchild} was orphaned; terminate did not reap the process group");
+    }
+
+    mgr.shutdown(Duration::from_secs(2)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn manager_kills_long_running_process_on_shutdown() {
     let dir = tmpdir();
     let cfg = ProcessConfig {
