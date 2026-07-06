@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.0](https://github.com/ornitech/rumor/compare/v0.12.0...v0.13.0) (2026-07-06)
+
+
+### Features
+
+* **web:** keep getrumor.dev in sync with the rumor app ([#42](https://github.com/ornitech/rumor/issues/42)) ([4bd62ac](https://github.com/ornitech/rumor/commit/4bd62ac09f045d79208617cecb6a91eedf73a92e))
+
+
+### Bug Fixes
+
+* **process:** reap grandchild processes on teardown by signalling the group ([#44](https://github.com/ornitech/rumor/issues/44)) ([1606286](https://github.com/ornitech/rumor/commit/160628681bfa99fbea19c3cc0861d516f0eea415))
+
 ## [0.12.0](https://github.com/ornitech/rumor/compare/v0.11.0...v0.12.0) (2026-06-29)
 
 
