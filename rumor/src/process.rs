@@ -291,7 +291,7 @@ impl Process {
         if !self.is_running() {
             return;
         }
-        unsafe { libc::kill(self.pid as i32, libc::SIGTERM) };
+        signal_group(self.pid, libc::SIGTERM);
         // Schedule a SIGKILL fallback. We can't capture &self into a task
         // (lifetime), so capture what we need.
         let pid = self.pid;
@@ -307,7 +307,7 @@ impl Process {
             .await;
             if matches!(*status_rx.borrow(), Status::Starting | Status::Running) {
                 warn!(pid, "SIGTERM grace expired; sending SIGKILL");
-                unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                signal_group(pid, libc::SIGKILL);
             }
         });
     }
@@ -325,14 +325,19 @@ impl Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
-        // Best-effort: if still running when dropped, send SIGTERM so we don't
-        // orphan children when the orchestrator quits or restarts.
+        // Best-effort: if still running when dropped, SIGTERM the whole process
+        // group so we don't orphan grandchildren when the orchestrator quits or
+        // restarts. Drop is synchronous with no grace period, so a group SIGKILL
+        // backstop below is the only thing that reaps a child that ignores TERM.
         if self.is_running() {
-            unsafe { libc::kill(self.pid as i32, libc::SIGTERM) };
+            signal_group(self.pid, libc::SIGTERM);
         }
-        // Hard fallback: ask the killer (which sends SIGKILL on unix via the
-        // underlying std::process::Child::kill).
+        // Hard fallback: ask the killer (SIGKILL to the leader via the underlying
+        // std::process::Child::kill), then SIGKILL the group to catch any
+        // grandchild the leader-only kill misses. ESRCH on an already-dead group
+        // is harmless.
         let _ = self.killer.lock().unwrap().kill();
+        signal_group(self.pid, libc::SIGKILL);
         let _ = self.status_tx.send(self.status());
     }
 }
@@ -877,7 +882,7 @@ impl ProcessManager {
         for i in 0..self.count() {
             if let Slot::Process(p) = self.slot(i) {
                 if p.is_running() {
-                    unsafe { libc::kill(p.pid as i32, libc::SIGKILL) };
+                    signal_group(p.pid, libc::SIGKILL);
                 }
             }
         }
@@ -894,7 +899,7 @@ impl ProcessManager {
         for i in 0..self.count() {
             if let Slot::Process(p) = self.slot(i) {
                 if p.is_running() {
-                    unsafe { libc::kill(p.pid as i32, libc::SIGTERM) };
+                    signal_group(p.pid, libc::SIGTERM);
                 }
             }
         }
@@ -909,11 +914,29 @@ impl ProcessManager {
         for i in 0..self.count() {
             if let Slot::Process(p) = self.slot(i) {
                 if p.is_running() {
-                    unsafe { libc::kill(p.pid as i32, libc::SIGKILL) };
+                    signal_group(p.pid, libc::SIGKILL);
                 }
             }
         }
     }
+}
+
+/// Signal an entire PTY process group by negating the leader PID. portable_pty
+/// puts each child in its own session (setsid), so pgid == pid and the group is
+/// confined to that PTY session — negating the pid can't reach rumor or sibling
+/// processes. This reaps non-forwarding wrappers (sh -c, pnpm, npm...) together
+/// with the grandchildren they spawn, which a single-PID signal would orphan.
+///
+/// A negative-pid kill on a group whose leader already exited returns ESRCH
+/// harmlessly (the group id persists while any member is alive), so ordering vs.
+/// the leader's own death does not matter.
+///
+/// Caveat: a child that calls setpgid into a NEW group of its own (rare;
+/// interactive job-control shells, launchers with `detached: true`) escapes
+/// this. Not the case for sh -c / pnpm / npm, whose children stay in the leader
+/// group.
+fn signal_group(pid: u32, sig: libc::c_int) {
+    unsafe { libc::kill(-(pid as i32), sig) };
 }
 
 fn push_diag(inner: &ManagerInner, idx: usize, msg: impl Into<String>) {
