@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/ornitech/rumor/compare/v0.13.0...v0.13.1) (2026-09-17)
+
+
+### Bug Fixes
+
+* **process:** clean up child processes when rumor is stopped by an OS signal ([#45](https://github.com/ornitech/rumor/issues/45)) ([baedec9](https://github.com/ornitech/rumor/commit/baedec9f7a94cb0b8923e156b5fd69098ecc8802))
+
 ## [0.13.0](https://github.com/ornitech/rumor/compare/v0.12.0...v0.13.0) (2026-07-06)
 
 
