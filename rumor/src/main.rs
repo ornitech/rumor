@@ -228,8 +228,26 @@ fn print_usage<W: Write>(out: &mut W) {
     let _ = writeln!(out, "Set RUMOR_LOG=debug to trace dependency readiness checks.");
 }
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<()> {
+/// How long exit may wait for blocking tasks after everything is torn down.
+/// Each process has a `spawn_blocking` reader parked in `read()` on its PTY
+/// master, which only returns once every holder of the slave is gone. A child
+/// that daemonised out of its process group (so rumor cannot reap it) but kept
+/// the slave open holds that read forever on Linux (macOS revokes the terminal
+/// when the session leader dies), and a plain runtime drop waits for blocking
+/// tasks indefinitely. Bound it so rumor always exits.
+const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
+
+fn main() -> Result<()> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("building tokio runtime")?;
+    let result = rt.block_on(async_main());
+    rt.shutdown_timeout(RUNTIME_SHUTDOWN_TIMEOUT);
+    result
+}
+
+async fn async_main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
     // `-h`/`--help`: usage to stdout, exit 0 (before config loading).
