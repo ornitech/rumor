@@ -76,13 +76,18 @@ async fn wait_for_file(path: &PathBuf, pred: impl Fn(&str) -> bool) -> String {
 }
 
 fn tmpdir() -> PathBuf {
+    // The counter matters: tests run in parallel inside one process and the
+    // clock only has microsecond resolution on macOS, so pid + time alone can
+    // hand two tests the same directory (and each other's pidfiles).
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let p = std::env::temp_dir().join(format!(
-        "rumor-pty-{}-{}",
+        "rumor-pty-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&p).unwrap();
     p.canonicalize().unwrap()
@@ -591,6 +596,17 @@ async fn expect_reaped(pid: i32, within: Duration, what: &str) {
     }
 }
 
+/// Poll until the manager reports every process group gone. The last members
+/// of a SIGKILLed group die asynchronously (a grandchild's own `sleep` can
+/// outlive it by a few milliseconds), so an instant assertion would race.
+async fn expect_all_exited(mgr: &ProcessManager, within: Duration) {
+    let deadline = tokio::time::Instant::now() + within;
+    while !mgr.all_exited() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(mgr.all_exited(), "process groups still alive after {within:?}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn force_kill_all_reaps_group_after_leader_exits() {
     let dir = tmpdir();
@@ -608,7 +624,7 @@ async fn force_kill_all_reaps_group_after_leader_exits() {
 
     mgr.force_kill_all();
     expect_reaped(grandchild, Duration::from_secs(3), "force_kill_all skipped an exited leader's group").await;
-    assert!(mgr.all_exited());
+    expect_all_exited(&mgr, Duration::from_secs(2)).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -624,7 +640,7 @@ async fn terminate_signals_group_after_leader_exits() {
 
     proc.terminate(Duration::from_millis(500));
     expect_reaped(grandchild, Duration::from_secs(3), "terminate returned early for an exited leader").await;
-    assert!(mgr.all_exited());
+    expect_all_exited(&mgr, Duration::from_secs(2)).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
