@@ -204,6 +204,18 @@ impl App {
         }
     }
 
+    /// Single entry point for every way rumor can be asked to stop: `q`,
+    /// Ctrl+C as a key, and SIGTERM/SIGINT/SIGHUP from the OS. The first request
+    /// starts the graceful shutdown; a second one while it is in progress
+    /// force-quits, exactly like pressing `q` twice.
+    pub fn request_shutdown(&mut self) {
+        if self.shutting_down {
+            self.should_quit = true;
+            return;
+        }
+        self.begin_shutdown();
+    }
+
     /// Enter the shutdown phase: stop watchers and SIGTERM everything, keeping
     /// the TUI alive to show progress. If nothing is running, quit immediately.
     fn begin_shutdown(&mut self) {
@@ -234,8 +246,8 @@ impl App {
     fn handle_nav_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Char('q') if !ctrl => self.begin_shutdown(),
-            KeyCode::Char('c') if ctrl => self.begin_shutdown(),
+            KeyCode::Char('q') if !ctrl => self.request_shutdown(),
+            KeyCode::Char('c') if ctrl => self.request_shutdown(),
             KeyCode::Left => self.prev_tab(),
             KeyCode::Right => self.next_tab(),
             KeyCode::Up => self.scroll_by(1),

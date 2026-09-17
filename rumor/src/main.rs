@@ -345,13 +345,15 @@ async fn main() -> Result<()> {
     };
 
     // Printed after leaving the alternate screen so it stays selectable in the
-    // terminal — easy to copy into an LLM chat or bug report.
+    // terminal — easy to copy into an LLM chat or bug report. Errors are
+    // ignored on purpose: after a SIGHUP the terminal is gone and `println!`
+    // would panic on the dead descriptor.
     if let Some(d) = &session_dir {
-        println!("Session logs: {}", d.display());
+        let _ = writeln!(io::stdout(), "Session logs: {}", d.display());
     }
 
     if let Err(e) = &result {
-        eprintln!("rumor: {e:#}");
+        let _ = writeln!(io::stderr(), "rumor: {e:#}");
     }
     result
 }
@@ -360,6 +362,17 @@ async fn run(
     processes: Vec<crate::config::ProcessConfig>,
     session_dir: Option<PathBuf>,
 ) -> Result<()> {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    // OS signals get the same graceful shutdown as `q`. Installed before any
+    // child exists so a supervisor stopping rumor, or the terminal closing,
+    // can never catch a child without a handler in place. Without these the
+    // default action kills rumor outright and every child, being a session
+    // leader of its own PTY, survives as an orphan.
+    let mut sigint = signal(SignalKind::interrupt()).context("installing SIGINT handler")?;
+    let mut sigterm = signal(SignalKind::terminate()).context("installing SIGTERM handler")?;
+    let mut sighup = signal(SignalKind::hangup()).context("installing SIGHUP handler")?;
+
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("creating terminal")?;
     let term_size = terminal.size().context("reading terminal size")?;
@@ -388,13 +401,28 @@ async fn run(
         }
     });
 
+    // Set once the terminal is unusable (SIGHUP, input stream gone, a failed
+    // draw): stop rendering and finish the shutdown headlessly instead.
+    let mut headless = false;
+    let mut draw_error: Option<anyhow::Error> = None;
     loop {
-        terminal
-            .draw(|f| ui::draw(f, &mut app))
-            .context("drawing frame")?;
+        if let Err(e) = terminal.draw(|f| ui::draw(f, &mut app)) {
+            warn!(error = %e, "draw failed; finishing shutdown headless");
+            draw_error = Some(anyhow::Error::from(e).context("drawing frame"));
+            app.request_shutdown();
+            headless = true;
+            break;
+        }
 
         tokio::select! {
             biased;
+            _ = sigterm.recv() => app.request_shutdown(),
+            _ = sigint.recv() => app.request_shutdown(),
+            _ = sighup.recv() => {
+                // The terminal is gone; nobody can see the shutdown screen.
+                app.request_shutdown();
+                headless = true;
+            }
             maybe_event = events.next() => match maybe_event {
                 Some(Ok(Event::Key(k))) => {
                     // On most platforms only Press events arrive in raw mode,
@@ -408,8 +436,16 @@ async fn run(
                     app.apply_resize(rows, cols);
                 }
                 Some(Ok(_)) => {}
-                Some(Err(e)) => warn!("event stream error: {e}"),
-                None => break,
+                Some(Err(e)) => {
+                    warn!("event stream error: {e}; shutting down headless");
+                    app.request_shutdown();
+                    headless = true;
+                }
+                None => {
+                    // Input closed under us: same as a hangup.
+                    app.request_shutdown();
+                    headless = true;
+                }
             },
             Some(info) = update_rx.recv() => {
                 app.update_available = Some(info);
@@ -417,22 +453,41 @@ async fn run(
             _ = tick.tick() => {}
         }
 
-        // Force-quit (second `q`) or the shutdown phase finished.
-        if app.should_quit || app.shutdown_complete() {
+        // Headless: leave the render loop and drain below. Otherwise run until
+        // force-quit (second `q`) or the shutdown phase finished.
+        if headless || app.should_quit || app.shutdown_complete() {
             break;
         }
+    }
+
+    if headless && !app.should_quit {
+        drain_shutdown(&app.mgr, HEADLESS_SHUTDOWN_GRACE).await;
     }
 
     // Backstop: SIGKILL anything still alive (e.g. force-quit before the grace
     // elapsed) so we never orphan a child. No-op on a clean shutdown.
     app.mgr.force_kill_all();
 
-    Ok(())
+    match draw_error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
-/// Grace period for children to exit after SIGTERM before we SIGKILL them in
-/// raw mode. Mirrors the TUI's shutdown grace.
-const RAW_SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
+/// Grace period for children to exit after SIGTERM before we SIGKILL them when
+/// there is no TUI to show progress (raw mode, or a TUI whose terminal went
+/// away). Mirrors the TUI's `SHUTDOWN_GRACE`.
+const HEADLESS_SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
+
+/// Finish a shutdown that `mgr.begin_shutdown()` has already started: wait up
+/// to `grace` for every process group to go, then SIGKILL the stragglers.
+async fn drain_shutdown(mgr: &ProcessManager, grace: Duration) {
+    let deadline = tokio::time::Instant::now() + grace;
+    while !mgr.all_exited() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    mgr.force_kill_all();
+}
 
 /// Raw mode: run every process and stream their combined output to stdout, one
 /// line at a time prefixed with `[name]`. No TUI. `only` (by process name)
@@ -466,6 +521,11 @@ async fn run_raw(
         pixel_height: 0,
     };
 
+    // Handlers go in before any child exists (see `run`).
+    let mut sigint = signal(SignalKind::interrupt()).context("installing SIGINT handler")?;
+    let mut sigterm = signal(SignalKind::terminate()).context("installing SIGTERM handler")?;
+    let mut sighup = signal(SignalKind::hangup()).context("installing SIGHUP handler")?;
+
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<RawLine>();
     let sink = RawSink {
         tx,
@@ -496,24 +556,19 @@ async fn run_raw(
     });
 
     // Run until a signal arrives or every process has exited on its own.
-    let mut sigint = signal(SignalKind::interrupt()).context("installing SIGINT handler")?;
-    let mut sigterm = signal(SignalKind::terminate()).context("installing SIGTERM handler")?;
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             _ = sigint.recv() => { mgr.begin_shutdown(); break; }
             _ = sigterm.recv() => { mgr.begin_shutdown(); break; }
+            _ = sighup.recv() => { mgr.begin_shutdown(); break; }
             _ = tick.tick() => { if mgr.all_finished() { break; } }
         }
     }
 
     // Let children settle after SIGTERM, then SIGKILL stragglers.
-    let deadline = tokio::time::Instant::now() + RAW_SHUTDOWN_GRACE;
-    while !mgr.all_exited() && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    mgr.force_kill_all();
+    drain_shutdown(&mgr, HEADLESS_SHUTDOWN_GRACE).await;
 
     // Drop the manager so its sink sender closes, letting the printer drain the
     // remaining buffered lines and finish. Bounded wait as a safety net.
