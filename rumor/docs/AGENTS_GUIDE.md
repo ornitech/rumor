@@ -25,8 +25,12 @@ rumor -t backend --raw               # run only tagged processes (+ their deps)
 - `-t`/`--tags TAG,...` selects the run-set: processes carrying **any** of the
   given tags, plus their transitive `dependsOn` targets. A positional config path
   must come before the first `-t`.
-- `rumor` runs until it receives Ctrl+C / SIGTERM, then SIGTERMs every child and
-  exits. If every selected process is run-to-completion (`longLived: false`),
+- `rumor` runs until it receives Ctrl+C, SIGTERM, SIGINT or SIGHUP (terminal
+  closed, supervisor stop). It then SIGTERMs every child's whole process group
+  (so `sh -c` / `npm` / `pnpm` wrappers are reaped together with what they
+  started), waits up to 3s, SIGKILLs anything left, and exits. A child that
+  daemonises into its own session (nx daemon, Docker containers) is outside its
+  reach. If every selected process is run-to-completion (`longLived: false`),
   `rumor` exits on its own once they have all finished.
 
 Exit code `2` with a usage message on stderr means the CLI args were invalid.
@@ -138,6 +142,7 @@ shadow them.
   or `~/.local/share/rumor/sessions/...` (Linux). Set `RUMOR_NO_SESSION_LOGS=1` to disable.
 - Main log: `~/Library/Logs/rumor/rumor.log` (macOS) / `~/.local/share/rumor/rumor.log`
   (Linux). Set `RUMOR_LOG=debug` to trace dependency readiness checks and `${VAR}` warnings.
+- Set `RUMOR_NO_UPDATE_CHECK=1` to skip the background update check (no `brew`/`curl` spawned).
 
 ## Complete example
 

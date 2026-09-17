@@ -84,8 +84,12 @@ pub struct Process {
     status_tx: watch::Sender<Status>,
     writer_tx: mpsc::UnboundedSender<Vec<u8>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-    killer: Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
     pid: u32,
+    /// Latched to true the first time a signal to the process group returns
+    /// ESRCH. The pgid survives as long as any member does, so ESRCH proves the
+    /// whole group is gone for good; after that the number may be recycled by
+    /// an unrelated process and must never be signalled again.
+    group_gone: Arc<AtomicBool>,
     _read_task: JoinHandle<()>,
     _write_task: JoinHandle<()>,
     _wait_task: JoinHandle<()>,
@@ -143,7 +147,7 @@ impl Process {
         drop(pair.slave);
 
         let pid = child.process_id().ok_or_else(|| anyhow!("no pid"))?;
-        let killer = child.clone_killer();
+        let group_gone = Arc::new(AtomicBool::new(false));
 
         let parser = Arc::new(Mutex::new(vt100::Parser::new(
             size.rows,
@@ -200,7 +204,13 @@ impl Process {
         );
         let (writer_tx, writer_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let write_task = spawn_write_task(writer, writer_rx, cfg.name.clone());
-        let wait_task = spawn_wait_task(child, status_tx.clone(), cfg.name.clone());
+        let wait_task = spawn_wait_task(
+            child,
+            status_tx.clone(),
+            cfg.name.clone(),
+            pid,
+            Arc::clone(&group_gone),
+        );
 
         Ok(Self {
             name: cfg.name.clone(),
@@ -213,8 +223,8 @@ impl Process {
             status_tx,
             writer_tx,
             master,
-            killer: Mutex::new(killer),
             pid,
+            group_gone,
             _read_task: read_task,
             _write_task: write_task,
             _wait_task: wait_task,
@@ -242,6 +252,20 @@ impl Process {
 
     pub fn is_running(&self) -> bool {
         matches!(self.status(), Status::Starting | Status::Running)
+    }
+
+    /// Signal this process's whole group (see the free `signal_group`), skipping
+    /// it once the group is known to be gone. Returns whether the group was
+    /// still there.
+    fn signal_group(&self, sig: libc::c_int) -> bool {
+        signal_group_latched(self.pid, &self.group_gone, sig)
+    }
+
+    /// True while any member of the process group exists: the leader or any
+    /// grandchild it left behind. Unlike `is_running`, this is what "the port
+    /// is free" and "nothing was orphaned" actually depend on.
+    pub fn group_alive(&self) -> bool {
+        self.signal_group(0)
     }
 
     pub fn write_input(&self, bytes: &[u8]) {
@@ -286,17 +310,22 @@ impl Process {
         *parser_guard = fresh;
     }
 
-    /// Send SIGTERM. After `grace`, send SIGKILL if still running.
+    /// SIGTERM the process group. After `grace`, SIGKILL whatever part of the
+    /// group is still alive. Works whether or not the leader is still running:
+    /// a wrapper that already exited can leave grandchildren behind, and those
+    /// are exactly what this has to reap.
     pub fn terminate(&self, grace: Duration) {
-        if !self.is_running() {
-            return;
+        if !self.signal_group(libc::SIGTERM) {
+            return; // group already gone
         }
-        signal_group(self.pid, libc::SIGTERM);
-        // Schedule a SIGKILL fallback. We can't capture &self into a task
+        // Schedule the SIGKILL fallback. We can't capture &self into a task
         // (lifetime), so capture what we need.
         let pid = self.pid;
+        let gone = Arc::clone(&self.group_gone);
         let mut status_rx = self.status_rx.clone();
         tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + grace;
+            // Cheap wait for the leader first (a watch channel, no polling)...
             let _ = tokio::time::timeout(grace, async {
                 while matches!(*status_rx.borrow(), Status::Starting | Status::Running) {
                     if status_rx.changed().await.is_err() {
@@ -305,14 +334,17 @@ impl Process {
                 }
             })
             .await;
-            if matches!(*status_rx.borrow(), Status::Starting | Status::Running) {
-                warn!(pid, "SIGTERM grace expired; sending SIGKILL");
-                signal_group(pid, libc::SIGKILL);
+            // ...then give any surviving grandchildren the rest of the grace.
+            while tokio::time::Instant::now() < deadline && signal_group_latched(pid, &gone, 0) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            if signal_group_latched(pid, &gone, libc::SIGKILL) {
+                warn!(pid, "SIGTERM grace expired; sent SIGKILL to the process group");
             }
         });
     }
 
-    /// Wait for the process to exit (either naturally or after `terminate`).
+    /// Wait for the leader to exit (either naturally or after `terminate`).
     pub async fn wait_for_exit(&self) {
         let mut rx = self.status_rx.clone();
         while matches!(*rx.borrow(), Status::Starting | Status::Running) {
@@ -321,23 +353,31 @@ impl Process {
             }
         }
     }
+
+    /// Wait for the leader to exit and then for the rest of its group to go,
+    /// bounded by `limit` (a member stuck in uninterruptible sleep can survive
+    /// even SIGKILL for a while; we don't hang a restart on it forever).
+    pub async fn wait_for_group_exit(&self, limit: Duration) {
+        let deadline = tokio::time::Instant::now() + limit;
+        let _ = tokio::time::timeout(limit, self.wait_for_exit()).await;
+        while self.group_alive() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
 }
 
 impl Drop for Process {
     fn drop(&mut self) {
         // Best-effort: if still running when dropped, SIGTERM the whole process
         // group so we don't orphan grandchildren when the orchestrator quits or
-        // restarts. Drop is synchronous with no grace period, so a group SIGKILL
-        // backstop below is the only thing that reaps a child that ignores TERM.
+        // restarts. Drop is synchronous with no grace period, so the group
+        // SIGKILL below is the only thing that reaps a child that ignores TERM.
         if self.is_running() {
-            signal_group(self.pid, libc::SIGTERM);
+            self.signal_group(libc::SIGTERM);
         }
-        // Hard fallback: ask the killer (SIGKILL to the leader via the underlying
-        // std::process::Child::kill), then SIGKILL the group to catch any
-        // grandchild the leader-only kill misses. ESRCH on an already-dead group
-        // is harmless.
-        let _ = self.killer.lock().unwrap().kill();
-        signal_group(self.pid, libc::SIGKILL);
+        // Hard fallback for the leader and every grandchild alike. Skipped
+        // automatically once the group is known to be gone.
+        self.signal_group(libc::SIGKILL);
         let _ = self.status_tx.send(self.status());
     }
 }
@@ -557,6 +597,8 @@ fn spawn_wait_task(
     mut child: Box<dyn portable_pty::Child + Send + Sync>,
     status_tx: watch::Sender<Status>,
     name: String,
+    pid: u32,
+    group_gone: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     tokio::task::spawn_blocking(move || {
         match child.wait() {
@@ -573,6 +615,9 @@ fn spawn_wait_task(
                 let _ = status_tx.send(Status::SpawnFailed(e.to_string()));
             }
         }
+        // In the common case the group died with its leader; probe once so the
+        // latch closes now and no later teardown pass touches this pgid.
+        signal_group_latched(pid, &group_gone, 0);
     })
 }
 
@@ -844,12 +889,15 @@ impl ProcessManager {
         self.kill_all();
     }
 
-    /// True when no slot holds a still-running process. Treats Waiting / Blocked
-    /// slots as "exited" — correct only after `begin_shutdown` has aborted the
-    /// watchers so nothing more will spawn. Used to poll shutdown progress.
+    /// True when no slot holds a live process *group*: the leader has exited
+    /// and no grandchild of it remains either. Treats Waiting / Blocked slots
+    /// as "exited" — correct only after `begin_shutdown` has aborted the
+    /// watchers so nothing more will spawn. Used to poll shutdown progress, so
+    /// the grace applies to grandchildren too instead of ending the moment a
+    /// thin wrapper dies.
     pub fn all_exited(&self) -> bool {
         (0..self.count()).all(|i| match self.slot(i) {
-            Slot::Process(p) => !p.is_running(),
+            Slot::Process(p) => !p.is_running() && !p.group_alive(),
             _ => true,
         })
     }
@@ -881,9 +929,8 @@ impl ProcessManager {
         self.abort_watchers();
         for i in 0..self.count() {
             if let Slot::Process(p) = self.slot(i) {
-                if p.is_running() {
-                    signal_group(p.pid, libc::SIGKILL);
-                }
+                // Unconditional: an exited leader can still have a live group.
+                p.signal_group(libc::SIGKILL);
             }
         }
     }
@@ -898,24 +945,16 @@ impl ProcessManager {
         self.abort_watchers();
         for i in 0..self.count() {
             if let Slot::Process(p) = self.slot(i) {
-                if p.is_running() {
-                    signal_group(p.pid, libc::SIGTERM);
-                }
+                p.signal_group(libc::SIGTERM);
             }
         }
         let deadline = tokio::time::Instant::now() + timeout;
-        for i in 0..self.count() {
-            if let Slot::Process(p) = self.slot(i) {
-                let remaining =
-                    deadline.saturating_duration_since(tokio::time::Instant::now());
-                let _ = tokio::time::timeout(remaining, p.wait_for_exit()).await;
-            }
+        while !self.all_exited() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
         for i in 0..self.count() {
             if let Slot::Process(p) = self.slot(i) {
-                if p.is_running() {
-                    signal_group(p.pid, libc::SIGKILL);
-                }
+                p.signal_group(libc::SIGKILL);
             }
         }
     }
@@ -927,16 +966,31 @@ impl ProcessManager {
 /// processes. This reaps non-forwarding wrappers (sh -c, pnpm, npm...) together
 /// with the grandchildren they spawn, which a single-PID signal would orphan.
 ///
-/// A negative-pid kill on a group whose leader already exited returns ESRCH
-/// harmlessly (the group id persists while any member is alive), so ordering vs.
-/// the leader's own death does not matter.
+/// Returns false only on ESRCH: no process with that pgid exists any more. The
+/// group id persists while any member is alive, so this is exact, and it is
+/// also the only moment the number can start being recycled — hence the latch
+/// in `signal_group_latched`, which every caller goes through.
 ///
-/// Caveat: a child that calls setpgid into a NEW group of its own (rare;
-/// interactive job-control shells, launchers with `detached: true`) escapes
-/// this. Not the case for sh -c / pnpm / npm, whose children stay in the leader
-/// group.
-fn signal_group(pid: u32, sig: libc::c_int) {
-    unsafe { libc::kill(-(pid as i32), sig) };
+/// Caveat: a child that calls setsid/setpgid into a NEW group of its own
+/// (daemonisers like the nx daemon, docker containers) escapes this. Not the
+/// case for sh -c / pnpm / npm, whose children stay in the leader group.
+fn signal_group(pid: u32, sig: libc::c_int) -> bool {
+    let rc = unsafe { libc::kill(-(pid as i32), sig) };
+    rc == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+/// `signal_group` with a one-way latch: once the group has been observed gone
+/// it is never signalled again, so a recycled pgid can't be hit. `sig` 0 is a
+/// pure liveness probe. Returns whether the group was still alive.
+fn signal_group_latched(pid: u32, gone: &AtomicBool, sig: libc::c_int) -> bool {
+    if gone.load(Ordering::SeqCst) {
+        return false;
+    }
+    let alive = signal_group(pid, sig);
+    if !alive {
+        gone.store(true, Ordering::SeqCst);
+    }
+    alive
 }
 
 fn push_diag(inner: &ManagerInner, idx: usize, msg: impl Into<String>) {
@@ -964,11 +1018,13 @@ async fn watch_slot(
     inner: Arc<ManagerInner>,
     wait_for_old: Option<Arc<Process>>,
 ) {
-    // On restart, wait for the previous process to fully exit before spawning
-    // a fresh one (avoids port-in-use races during quick restarts).
+    // On restart, wait for the previous process *group* to fully exit before
+    // spawning a fresh one (avoids port-in-use races during quick restarts;
+    // the port is often held by a grandchild, not the leader). `restart`
+    // already scheduled a group SIGKILL after its grace, so this is bounded.
     if let Some(old) = wait_for_old {
         push_diag(&inner, idx, "waiting for previous instance to exit");
-        old.wait_for_exit().await;
+        old.wait_for_group_exit(Duration::from_secs(5)).await;
         push_diag(&inner, idx, "previous instance exited");
     }
 

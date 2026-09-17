@@ -76,9 +76,11 @@ waste tokens and break naive line parsers); pass `--color` to keep them.
 rumor --raw --only backend,worker   # run all, print only backend + worker
 ```
 
-rumor runs until you press Ctrl+C (or it receives SIGTERM), then SIGTERMs every
-child and exits. If every process is run-to-completion (`longLived: false`),
-rumor exits on its own once they have all finished. `--tags` still selects the
+rumor runs until you press Ctrl+C or it receives SIGTERM, SIGINT or SIGHUP (the
+terminal closed, a supervisor stopped it). It then SIGTERMs every child's whole
+process group, waits up to 3s, SIGKILLs anything left, and exits. If every
+process is run-to-completion (`longLived: false`), rumor exits on its own once
+they have all finished. `--tags` still selects the
 run-set; `--only` is a finer print filter layered on top. Per-process session
 logs are written exactly as in TUI mode. `--only` and `--color` require `--raw`.
 
@@ -277,14 +279,20 @@ and **Details** (a read-only metadata screen for the selected process).
 | `Up` / `Down` / `PgUp` / `PgDn` / `Home` / `End` | Scroll the selected tab's scrollback |
 | `Enter` | Enter Focus mode (input forwarded to the child PTY) |
 | `Esc` | Leave Focus mode |
-| `r` | Restart the selected process. Sends `SIGTERM`, then `SIGKILL` after a 3s grace, and waits for the old process to fully exit before respawning (avoids port-in-use races). |
-| `k` | Kill the selected process. Sends `SIGTERM`, then `SIGKILL` after a 3s grace; does not respawn. |
+| `r` | Restart the selected process. Sends `SIGTERM` to its process group, then `SIGKILL` after a 3s grace, and waits for the old process group to fully exit before respawning (avoids port-in-use races). |
+| `k` | Kill the selected process. Sends `SIGTERM` to its process group, then `SIGKILL` after a 3s grace; does not respawn. |
 | `Ctrl+R` | Restart all |
 | `Ctrl+K` | Kill all |
 | `w` | Toggle line-wrap on the selected tab |
 | `y` | Copy the selected process's session log path to the clipboard (also works in the details screen) |
 | `d` | Open the process details screen (`Esc`/`d` to close; `↑/↓`, `PgUp/PgDn`, `Home` to scroll; `y` to copy the session log path) |
-| `q` / `Ctrl+C` | Quit |
+| `q` / `Ctrl+C` | Quit: `SIGTERM` every process group, `SIGKILL` whatever is left after 3s. Press again to skip the grace. The same shutdown runs when rumor receives `SIGTERM`, `SIGINT` or `SIGHUP`. |
+
+Signals go to each child's whole process group, so wrappers that don't forward
+signals (`sh -c`, `npm run`, `pnpm`) are reaped together with the servers they
+started. A child that daemonises into a session of its own (the nx daemon, a
+Docker container behind `docker run`) leaves that group on purpose and is
+outside rumor's reach; stop those with their own tooling.
 
 ## Status colors
 
@@ -341,6 +349,8 @@ run:
 ## Logs
 
 Written to `~/Library/Logs/rumor/rumor.log` on macOS (`~/.local/share/rumor/rumor.log` on Linux). Set `RUMOR_LOG=debug` for verbose tracing.
+
+Set `RUMOR_NO_UPDATE_CHECK=1` to skip the background "newer version available?" check (it runs `brew outdated` or `curl` once at startup).
 
 ## License
 

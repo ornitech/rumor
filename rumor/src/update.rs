@@ -78,6 +78,11 @@ pub async fn run_self_update() -> Result<()> {
 /// Check for an update through the medium the binary was installed with.
 /// Returns `None` on any failure or when already up to date.
 pub async fn check_for_update(current: &str) -> Option<UpdateInfo> {
+    // Escape hatch for tests, sandboxes, and agents that must not touch the
+    // network or spawn brew/curl in the background.
+    if std::env::var_os("RUMOR_NO_UPDATE_CHECK").is_some() {
+        return None;
+    }
     match detect_medium() {
         InstallMedium::Homebrew => check_brew().await,
         InstallMedium::Other => check_github(current).await,
@@ -89,6 +94,8 @@ async fn check_brew() -> Option<UpdateInfo> {
         CHECK_TIMEOUT,
         Command::new("brew")
             .args(["outdated", "--json=v2", "rumor"])
+            // A timed-out or abandoned check must not leave brew running.
+            .kill_on_drop(true)
             .output(),
     )
     .await
@@ -108,6 +115,8 @@ async fn check_github(current: &str) -> Option<UpdateInfo> {
         CHECK_TIMEOUT,
         Command::new("curl")
             .args(["-fsSL", "-H", "User-Agent: rumor", &url])
+            // A timed-out or abandoned check must not leave curl running.
+            .kill_on_drop(true)
             .output(),
     )
     .await
