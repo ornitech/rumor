@@ -289,9 +289,9 @@ and **Details** (a read-only metadata screen for the selected process).
 | `q` / `Ctrl+C` | Quit: `SIGTERM` every process group, `SIGKILL` whatever is left after 3s. Press again to skip the grace. The same shutdown runs when rumor receives `SIGTERM`, `SIGINT` or `SIGHUP`. |
 
 Signals go to each child's whole process group, so wrappers that don't forward
-signals (`sh -c`, `npm run`, `pnpm`) are reaped together with the servers they
-started. A child that daemonises into a session of its own (the nx daemon, a
-Docker container behind `docker run`) leaves that group on purpose and is
+signals (`sh -c`, `npm run`, `pnpm`) are shut down together with the servers
+they started. A child that daemonises into a session of its own (the nx daemon,
+a Docker container behind `docker run`) leaves that group on purpose and is
 outside rumor's reach; stop those with their own tooling.
 
 ## Status colors

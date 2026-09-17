@@ -3,7 +3,7 @@
 //!
 //! Exercises the full pipeline without driving the TUI:
 //!   ProcessManager::new -> Process::spawn -> read task -> vt100::Parser
-//!     -> ProcessManager::shutdown (SIGTERM + reap).
+//!     -> ProcessManager::shutdown (SIGTERM + cleanup).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -430,10 +430,10 @@ async fn dep_with_log_condition_unblocks_dependent() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn terminate_reaps_grandchild_not_just_wrapper() {
+async fn terminate_cleans_up_grandchild_not_just_wrapper() {
     // Regression: a non-forwarding wrapper (sh -c, pnpm, npm) whose real
     // workload is a grandchild that ignores TERM/HUP (like nx/node's graceful
-    // handlers) must be reaped as a group, not left orphaned at PPID 1.
+    // handlers) must be shut down as a group, not left orphaned at PPID 1.
     //
     // rumor spawns the outer `sh` (portable_pty setsid => it leads its own
     // process group, pgid == pid). Both the outer sh and the inner `sh` it
@@ -442,7 +442,7 @@ async fn terminate_reaps_grandchild_not_just_wrapper() {
     // expired; sending SIGKILL` path). The inner sh is a group member whose own
     // pid != pgid and which survives everything but SIGKILL. terminate escalates
     // to SIGKILL after grace: hitting only the leader pid orphans the inner sh;
-    // hitting the group (negated pid) reaps it.
+    // hitting the group (negated pid) shuts it down.
     let dir = tmpdir();
     let pidfile = dir.join("grandchild.pid");
 
@@ -493,7 +493,7 @@ async fn terminate_reaps_grandchild_not_just_wrapper() {
     proc.terminate(Duration::from_millis(500));
     let _ = tokio::time::timeout(Duration::from_secs(3), proc.wait_for_exit()).await;
 
-    // The group SIGKILL must have reaped the trapping grandchild.
+    // The group SIGKILL must have killed the trapping grandchild.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while alive(grandchild) && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -501,7 +501,7 @@ async fn terminate_reaps_grandchild_not_just_wrapper() {
     if alive(grandchild) {
         // Don't leak a busy-idling orphan if the assertion is about to fail.
         unsafe { libc::kill(grandchild, libc::SIGKILL) };
-        panic!("grandchild {grandchild} was orphaned; terminate did not reap the process group");
+        panic!("grandchild {grandchild} was orphaned; terminate did not shut down the process group");
     }
 
     mgr.shutdown(Duration::from_secs(2)).await;
@@ -540,7 +540,7 @@ async fn manager_kills_long_running_process_on_shutdown() {
 /// soon as the grandchild has written its pidfile (i.e. installed its traps;
 /// exiting earlier would HUP it along with the session). The slot shows
 /// `Exited` while the group is still alive: the shape every teardown path has
-/// to reap even though `is_running()` is false.
+/// to clean up even though `is_running()` is false.
 fn exited_leader_cfg(dir: &PathBuf, pidfile: &PathBuf) -> ProcessConfig {
     ProcessConfig {
         name: "exited-leader".into(),
@@ -585,7 +585,7 @@ fn pid_alive(pid: i32) -> bool {
 }
 
 /// Poll until `pid` is gone; SIGKILL it and panic with `what` if it is not.
-async fn expect_reaped(pid: i32, within: Duration, what: &str) {
+async fn expect_cleaned_up(pid: i32, within: Duration, what: &str) {
     let deadline = tokio::time::Instant::now() + within;
     while pid_alive(pid) && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -608,7 +608,7 @@ async fn expect_all_exited(mgr: &ProcessManager, within: Duration) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn force_kill_all_reaps_group_after_leader_exits() {
+async fn force_kill_all_cleans_up_group_after_leader_exits() {
     let dir = tmpdir();
     let pidfile = dir.join("grandchild.pid");
     let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
@@ -623,7 +623,7 @@ async fn force_kill_all_reaps_group_after_leader_exits() {
     assert!(!mgr.all_exited(), "all_exited must see the live grandchild");
 
     mgr.force_kill_all();
-    expect_reaped(grandchild, Duration::from_secs(3), "force_kill_all skipped an exited leader's group").await;
+    expect_cleaned_up(grandchild, Duration::from_secs(3), "force_kill_all skipped an exited leader's group").await;
     expect_all_exited(&mgr, Duration::from_secs(2)).await;
 }
 
@@ -639,7 +639,7 @@ async fn terminate_signals_group_after_leader_exits() {
     assert!(pid_alive(grandchild));
 
     proc.terminate(Duration::from_millis(500));
-    expect_reaped(grandchild, Duration::from_secs(3), "terminate returned early for an exited leader").await;
+    expect_cleaned_up(grandchild, Duration::from_secs(3), "terminate returned early for an exited leader").await;
     expect_all_exited(&mgr, Duration::from_secs(2)).await;
 }
 

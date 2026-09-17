@@ -313,7 +313,7 @@ impl Process {
     /// SIGTERM the process group. After `grace`, SIGKILL whatever part of the
     /// group is still alive. Works whether or not the leader is still running:
     /// a wrapper that already exited can leave grandchildren behind, and those
-    /// are exactly what this has to reap.
+    /// are exactly what this has to clean up.
     pub fn terminate(&self, grace: Duration) {
         if !self.signal_group(libc::SIGTERM) {
             return; // group already gone
@@ -371,7 +371,7 @@ impl Drop for Process {
         // Best-effort: if still running when dropped, SIGTERM the whole process
         // group so we don't orphan grandchildren when the orchestrator quits or
         // restarts. Drop is synchronous with no grace period, so the group
-        // SIGKILL below is the only thing that reaps a child that ignores TERM.
+        // SIGKILL below is the only thing that kills a child that ignores TERM.
         if self.is_running() {
             self.signal_group(libc::SIGTERM);
         }
@@ -963,8 +963,9 @@ impl ProcessManager {
 /// Signal an entire PTY process group by negating the leader PID. portable_pty
 /// puts each child in its own session (setsid), so pgid == pid and the group is
 /// confined to that PTY session — negating the pid can't reach rumor or sibling
-/// processes. This reaps non-forwarding wrappers (sh -c, pnpm, npm...) together
-/// with the grandchildren they spawn, which a single-PID signal would orphan.
+/// processes. This shuts down non-forwarding wrappers (sh -c, pnpm, npm...)
+/// together with the grandchildren they spawn, which a single-PID signal would
+/// orphan.
 ///
 /// Returns false only on ESRCH: no process with that pgid exists any more. The
 /// group id persists while any member is alive, so this is exact, and it is

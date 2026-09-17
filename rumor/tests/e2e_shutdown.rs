@@ -36,7 +36,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_rumor");
 const EXIT_BUDGET: Duration = Duration::from_secs(7);
 /// How long a group may linger after rumor has exited. SIGKILL is
 /// asynchronous but fast; anything slower than this is an orphan.
-const REAP_BUDGET: Duration = Duration::from_secs(2);
+const CLEANUP_BUDGET: Duration = Duration::from_secs(2);
 /// A run consisting only of a TERM-honouring child must not sit out the full
 /// grace; this proves the TERM path works and shutdown does not always wait.
 const FAST_EXIT_BUDGET: Duration = Duration::from_millis(1500);
@@ -692,15 +692,15 @@ impl Rumor {
         let pgids = self.pgids();
         let inner = self.inner_pids();
         assert!(!pgids.is_empty(), "no child groups were recorded");
-        let reaped = poll_until(REAP_BUDGET, || {
+        let cleaned_up = poll_until(CLEANUP_BUDGET, || {
             group_members(&pgids).is_empty() && inner.iter().all(|(_, p)| !alive(*p))
         });
-        if !reaped {
+        if !cleaned_up {
             let rows = group_members(&pgids);
             let live_inner: Vec<_> = inner.iter().filter(|(_, p)| alive(*p)).collect();
             panic!(
                 "orphans survived rumor's exit ({:?} after exit):\n{}\ninner pids still alive: {:?}\nrumor.log:\n{}",
-                REAP_BUDGET,
+                CLEANUP_BUDGET,
                 fmt_rows(&rows),
                 live_inner,
                 self.rumor_log()
@@ -794,37 +794,37 @@ fn run_matrix(mode: Mode, trigger: Trigger) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn tui_sigterm_reaps_every_group() {
+fn tui_sigterm_cleans_up_every_group() {
     run_matrix(Mode::Tui, Trigger::Signal(libc::SIGTERM));
 }
 
 #[test]
-fn tui_sigint_reaps_every_group() {
+fn tui_sigint_cleans_up_every_group() {
     run_matrix(Mode::Tui, Trigger::Signal(libc::SIGINT));
 }
 
 #[test]
-fn tui_sighup_reaps_every_group() {
+fn tui_sighup_cleans_up_every_group() {
     run_matrix(Mode::Tui, Trigger::Signal(libc::SIGHUP));
 }
 
 #[test]
-fn tui_pty_closed_reaps_every_group() {
+fn tui_pty_closed_cleans_up_every_group() {
     run_matrix(Mode::Tui, Trigger::ClosePty);
 }
 
 #[test]
-fn tui_q_key_reaps_every_group() {
+fn tui_q_key_cleans_up_every_group() {
     run_matrix(Mode::Tui, Trigger::Keys(b"q"));
 }
 
 #[test]
-fn tui_ctrl_c_key_reaps_every_group() {
+fn tui_ctrl_c_key_cleans_up_every_group() {
     run_matrix(Mode::Tui, Trigger::Keys(b"\x03"));
 }
 
 #[test]
-fn tui_force_quit_reaps_every_group() {
+fn tui_force_quit_cleans_up_every_group() {
     run_matrix(Mode::Tui, Trigger::ForceQuit);
 }
 
@@ -848,8 +848,8 @@ fn tui_exits_on_time_when_an_escaped_child_holds_the_pty() {
     let mut r = Rumor::launch(Mode::Tui, &[Shape::Escapee]);
     fire(&mut r, Trigger::Keys(b"q"));
     // The escapee left rumor's process group on purpose (a daemonising child);
-    // rumor cannot reap it and is not expected to. It must still exit on time
-    // instead of blocking on the PTY the escapee keeps open.
+    // rumor cannot clean it up and is not expected to. It must still exit on
+    // time instead of blocking on the PTY the escapee keeps open.
     let took = r.wait_exit(EXIT_BUDGET);
     let escapee = read_pid(&r.pids.join("escapee.1.pid")).expect("escapee pid");
     unsafe {
@@ -862,8 +862,8 @@ fn tui_exits_on_time_when_an_escaped_child_holds_the_pty() {
 }
 
 #[test]
-#[ignore = "rumor cannot react to SIGKILL; needs the deferred reaper helper"]
-fn tui_sigkill_reaps_every_group() {
+#[ignore = "rumor cannot react to SIGKILL; needs the deferred cleanup helper"]
+fn tui_sigkill_cleans_up_every_group() {
     run_matrix(Mode::Tui, Trigger::Signal(libc::SIGKILL));
 }
 
@@ -872,17 +872,17 @@ fn tui_sigkill_reaps_every_group() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn raw_sigterm_reaps_every_group() {
+fn raw_sigterm_cleans_up_every_group() {
     run_matrix(Mode::Raw, Trigger::Signal(libc::SIGTERM));
 }
 
 #[test]
-fn raw_sigint_reaps_every_group() {
+fn raw_sigint_cleans_up_every_group() {
     run_matrix(Mode::Raw, Trigger::Signal(libc::SIGINT));
 }
 
 #[test]
-fn raw_sighup_reaps_every_group() {
+fn raw_sighup_cleans_up_every_group() {
     run_matrix(Mode::Raw, Trigger::Signal(libc::SIGHUP));
 }
 
@@ -917,7 +917,7 @@ fn raw_exits_on_time_when_an_escaped_child_holds_the_pty() {
 }
 
 #[test]
-#[ignore = "rumor cannot react to SIGKILL; needs the deferred reaper helper"]
-fn raw_sigkill_reaps_every_group() {
+#[ignore = "rumor cannot react to SIGKILL; needs the deferred cleanup helper"]
+fn raw_sigkill_cleans_up_every_group() {
     run_matrix(Mode::Raw, Trigger::Signal(libc::SIGKILL));
 }

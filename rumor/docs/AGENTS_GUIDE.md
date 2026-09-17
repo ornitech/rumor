@@ -27,7 +27,7 @@ rumor -t backend --raw               # run only tagged processes (+ their deps)
   must come before the first `-t`.
 - `rumor` runs until it receives Ctrl+C, SIGTERM, SIGINT or SIGHUP (terminal
   closed, supervisor stop). It then SIGTERMs every child's whole process group
-  (so `sh -c` / `npm` / `pnpm` wrappers are reaped together with what they
+  (so `sh -c` / `npm` / `pnpm` wrappers are shut down together with what they
   started), waits up to 3s, SIGKILLs anything left, and exits. A child that
   daemonises into its own session (nx daemon, Docker containers) is outside its
   reach. If every selected process is run-to-completion (`longLived: false`),

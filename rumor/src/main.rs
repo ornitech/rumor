@@ -231,10 +231,10 @@ fn print_usage<W: Write>(out: &mut W) {
 /// How long exit may wait for blocking tasks after everything is torn down.
 /// Each process has a `spawn_blocking` reader parked in `read()` on its PTY
 /// master, which only returns once every holder of the slave is gone. A child
-/// that daemonised out of its process group (so rumor cannot reap it) but kept
-/// the slave open holds that read forever on Linux (macOS revokes the terminal
-/// when the session leader dies), and a plain runtime drop waits for blocking
-/// tasks indefinitely. Bound it so rumor always exits.
+/// that daemonised out of its process group (so rumor cannot clean it up) but
+/// kept the slave open holds that read forever on Linux (macOS revokes the
+/// terminal when the session leader dies), and a plain runtime drop waits for
+/// blocking tasks indefinitely. Bound it so rumor always exits.
 const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn main() -> Result<()> {
