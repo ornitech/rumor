@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/ornitech/rumor/compare/v0.13.0...v0.13.1) (2026-09-17)
+
+
+### Bug Fixes
+
+* **process:** reap children when rumor is stopped by an OS signal ([#45](https://github.com/ornitech/rumor/issues/45)) ([9717256](https://github.com/ornitech/rumor/commit/971725689d490bbbfa4be692be0038ac695ce7f8))
+
 ## [0.13.0](https://github.com/ornitech/rumor/compare/v0.12.0...v0.13.0) (2026-07-06)
 
 
