@@ -25,13 +25,17 @@ use config::ProcessConfig;
 use process::ProcessManager;
 
 fn tmpdir() -> PathBuf {
+    // Counter: parallel tests share a pid and the macOS clock is only
+    // microsecond-precise, so pid + time alone can collide (see pty_smoke.rs).
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let p = std::env::temp_dir().join(format!(
-        "rumor-logfile-e2e-{}-{}",
+        "rumor-logfile-e2e-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&p).unwrap();
     p.canonicalize().unwrap()

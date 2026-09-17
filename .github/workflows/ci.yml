@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rumor/target
+          key: cargo-test-${{ matrix.os }}-${{ hashFiles('rumor/Cargo.lock') }}
+
+      # The e2e shutdown suite (rumor/tests/e2e_shutdown.rs) drives the real
+      # binary in a PTY and checks with `ps` that no child process group
+      # survives; node and python3 are present on both runners so every shape
+      # runs.
+      - name: Test
+        run: cargo test --locked --manifest-path rumor/Cargo.toml

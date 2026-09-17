@@ -76,13 +76,18 @@ async fn wait_for_file(path: &PathBuf, pred: impl Fn(&str) -> bool) -> String {
 }
 
 fn tmpdir() -> PathBuf {
+    // The counter matters: tests run in parallel inside one process and the
+    // clock only has microsecond resolution on macOS, so pid + time alone can
+    // hand two tests the same directory (and each other's pidfiles).
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let p = std::env::temp_dir().join(format!(
-        "rumor-pty-{}-{}",
+        "rumor-pty-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&p).unwrap();
     p.canonicalize().unwrap()
@@ -529,4 +534,151 @@ async fn manager_kills_long_running_process_on_shutdown() {
 
     mgr.shutdown(Duration::from_secs(3)).await;
     assert!(!proc.is_running());
+}
+
+/// A wrapper that backgrounds a TERM/HUP-ignoring grandchild and exits 0 as
+/// soon as the grandchild has written its pidfile (i.e. installed its traps;
+/// exiting earlier would HUP it along with the session). The slot shows
+/// `Exited` while the group is still alive: the shape every teardown path has
+/// to reap even though `is_running()` is false.
+fn exited_leader_cfg(dir: &PathBuf, pidfile: &PathBuf) -> ProcessConfig {
+    ProcessConfig {
+        name: "exited-leader".into(),
+        command: "sh".into(),
+        args: vec![
+            "-c".into(),
+            format!(
+                "sh -c 'trap \"\" TERM HUP; echo $$ > {p}; while true; do sleep 1; done' & \
+                 while [ ! -s {p} ]; do sleep 0.05; done; exit 0",
+                p = pidfile.display()
+            ),
+        ],
+        cwd: dir.clone(),
+        env_files: vec![],
+        global_env_files: vec![],
+        env: HashMap::new(),
+        dynamic_ports: HashMap::new(),
+        depends_on: vec![],
+        long_lived: true,
+        tags: vec![],
+        retry: None,
+    }
+}
+
+async fn wait_pidfile(pidfile: &PathBuf) -> i32 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(s) = std::fs::read_to_string(pidfile) {
+            if let Ok(pid) = s.trim().parse::<i32>() {
+                return pid;
+            }
+        }
+        if tokio::time::Instant::now() > deadline {
+            panic!("grandchild pid never recorded");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+fn pid_alive(pid: i32) -> bool {
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+/// Poll until `pid` is gone; SIGKILL it and panic with `what` if it is not.
+async fn expect_reaped(pid: i32, within: Duration, what: &str) {
+    let deadline = tokio::time::Instant::now() + within;
+    while pid_alive(pid) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    if pid_alive(pid) {
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        panic!("grandchild {pid} was orphaned: {what}");
+    }
+}
+
+/// Poll until the manager reports every process group gone. The last members
+/// of a SIGKILLed group die asynchronously (a grandchild's own `sleep` can
+/// outlive it by a few milliseconds), so an instant assertion would race.
+async fn expect_all_exited(mgr: &ProcessManager, within: Duration) {
+    let deadline = tokio::time::Instant::now() + within;
+    while !mgr.all_exited() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(mgr.all_exited(), "process groups still alive after {within:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn force_kill_all_reaps_group_after_leader_exits() {
+    let dir = tmpdir();
+    let pidfile = dir.join("grandchild.pid");
+    let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
+    let mgr = ProcessManager::new(vec![exited_leader_cfg(&dir, &pidfile)], size, None);
+    let proc = wait_for_process(&mgr, 0).await;
+    let grandchild = wait_pidfile(&pidfile).await;
+    let _ = tokio::time::timeout(Duration::from_secs(3), proc.wait_for_exit()).await;
+    assert!(!proc.is_running(), "leader should have exited");
+    assert!(pid_alive(grandchild), "grandchild should outlive its leader");
+
+    // The group is still alive, so the manager must not report a clean exit.
+    assert!(!mgr.all_exited(), "all_exited must see the live grandchild");
+
+    mgr.force_kill_all();
+    expect_reaped(grandchild, Duration::from_secs(3), "force_kill_all skipped an exited leader's group").await;
+    expect_all_exited(&mgr, Duration::from_secs(2)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminate_signals_group_after_leader_exits() {
+    let dir = tmpdir();
+    let pidfile = dir.join("grandchild.pid");
+    let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
+    let mgr = ProcessManager::new(vec![exited_leader_cfg(&dir, &pidfile)], size, None);
+    let proc = wait_for_process(&mgr, 0).await;
+    let grandchild = wait_pidfile(&pidfile).await;
+    let _ = tokio::time::timeout(Duration::from_secs(3), proc.wait_for_exit()).await;
+    assert!(pid_alive(grandchild));
+
+    proc.terminate(Duration::from_millis(500));
+    expect_reaped(grandchild, Duration::from_secs(3), "terminate returned early for an exited leader").await;
+    expect_all_exited(&mgr, Duration::from_secs(2)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restart_waits_for_group_not_just_leader() {
+    let dir = tmpdir();
+    let pidfile = dir.join("grandchild.pid");
+    let size = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
+    let mgr = ProcessManager::new(vec![exited_leader_cfg(&dir, &pidfile)], size, None);
+    let old = wait_for_process(&mgr, 0).await;
+    let old_pid = old.pid();
+    let grandchild = wait_pidfile(&pidfile).await;
+    let _ = tokio::time::timeout(Duration::from_secs(3), old.wait_for_exit()).await;
+    assert!(pid_alive(grandchild));
+    // Release our handle so the manager alone decides when the old slot drops.
+    drop(old);
+
+    mgr.restart(0);
+
+    // Wait for the new instance; at the moment it appears, the old group
+    // (the port holder in real life) must already be gone.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    let new_pid = loop {
+        if let Some(p) = mgr.process(0) {
+            if p.pid() != old_pid {
+                break p.pid();
+            }
+        }
+        if tokio::time::Instant::now() > deadline {
+            unsafe { libc::kill(grandchild, libc::SIGKILL) };
+            panic!("restart never spawned a new instance");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    assert_ne!(new_pid, old_pid);
+    if pid_alive(grandchild) {
+        unsafe { libc::kill(grandchild, libc::SIGKILL) };
+        panic!("restart spawned pid {new_pid} while the old group's grandchild {grandchild} was still alive");
+    }
+
+    mgr.shutdown(Duration::from_secs(2)).await;
 }
